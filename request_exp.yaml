@@ -1,0 +1,28 @@
+# config.yaml
+
+# global variables
+
+username: "root"
+password: "helloroot"
+encoding: "json_ietf"   # json, bytes, proto, ascii, json_ietf
+targets:
+  - "10.1.11.101:9339"
+
+# how many clients would spawn?
+times: 1
+
+subscribe:
+  # SubscriptionList fields mapping directly to gnmi.proto
+  mode: "poll"          # once, stream, poll
+  update_only: false
+  
+  subscription:
+    paths:
+      - '/interfaces/interface[name="te0/3"]/state'
+      - '/interfaces/interface[name="te0/222"]/state'
+
+outputs:
+  log_file:
+    type: file
+    file-type: stdout
+    format: json
