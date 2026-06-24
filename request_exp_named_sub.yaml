@@ -1,18 +1,15 @@
-username: "admin"
-password: "password"
 debug: false
 
 subscriptions:
-  interfaces_ipi:
+  interfaces_B:
     mode: "stream"
     encoding: "json_ietf"
     subscription:
       path:
-      - 'ipi:/interfaces/interface[name="mgmt0"]/state/counters'
-      - 'ipi:/interfaces/interface[name="te0/1"]/state'
-      - 'ipi:/interfaces/interface[name="te0/2"]/state'
+      - '/interfaces/interface[name="mgmt0"]/state/counters'
+      - '/interfaces/interface[name="te0/2"]/state'
       mode: "sample"
-      sample_interval: 43 # 43 seconds
+      sample_interval: 90 # seconds
 
   interfaces:
     mode: "stream"
@@ -21,18 +18,16 @@ subscriptions:
       path:
       - '/interfaces/interface[name="te0/12"]/state/counters'
       - '/interfaces/interface[name="te0/13"]/state/counters'
-      - '/interfaces/interface[name="te0/21"]/state'
       mode: "sample"
-      sample_interval: 60 # 43 seconds
+      sample_interval: 100 # seconds
         
 targets:
-  10.1.11.82:9339:
+  10.1.11.101:9339:
     subscriptions:
       - interfaces
-      - interfaces_ipi
+      - interfaces_B
     username: "admin"
     password: "Frontier12#"
-    times: 3 #spawn five times
     update_only: false
 
 outputs:
