@@ -16,21 +16,9 @@ class SubscriptionManager:
         """
             cfg: object of `ParsedConfig` class
         """
-        self.targets = cfg.targets       # List of "IP:PORT"
-        self.username = cfg.username
-        self.password = cfg.password
-        self.paths = cfg.paths           # List of paths
-        self.mode = cfg.mode
-        self.prefix = cfg.prefix
-        self.encoding = cfg.encoding
-        self.times = cfg.times
-
-        self.outputs = cfg.outputs
-
-        self.args = {
-            'sub_mode': cfg.sub_mode,
-            'sample_interval': cfg.sample_interval,
-        }
+        self.session_configs = cfg.sessions # list of SessionConfig
+        self.debug = cfg.debug # debug flag
+        self.outputs = cfg.outputs # output methods
         
         self.sessions = []           # Holds the GNMISession objects
         self.threads = []            # Holds the active Thread objects
@@ -42,17 +30,35 @@ class SubscriptionManager:
 
     def build_sessions(self):
         """Parses the targets and instantiates the Worker objects."""
-        for target_str in self.targets:
-            for _ in range(self.times):
+        for sc in self.session_configs:
+            for _ in range(sc.times):
                 try:
-                    ip, port = target_str.split(':')
-                    session = GNMISession(ip, int(port), self.paths, self.mode, self.data_queue,
-                                        encoding=self.encoding, username=self.username,
-                                        password=self.password, **self.args)
+                    #TODO: support list-based config
+                    ip, port = sc.target.split(':')
+
+                    # Package STREAM-specific args and update-only flag
+                    args = {
+                        'sub_mode' : sc.sub_mode,
+                        'sample_interval' : sc.sample_interval,
+                        'update_only' : sc.update_only
+                    }
+
+                    session = GNMISession(
+                        target_ip=ip,
+                        target_port=int(port),
+                        paths=sc.paths,
+                        data_queue=self.data_queue,
+                        mode = sc.mode,
+                        encoding=sc.encoding,
+                        username=sc.username,
+                        password=sc.password,
+                        prefix=sc.prefix,
+                        subscription_name=sc.subscription_name,
+                        **args)
 
                     self.sessions.append(session)
                 except ValueError:
-                    print(f"[Manager] Invalid target format '{target_str}'. Expected IP:PORT.")
+                    print(f"[Manager] Invalid target format '{sc.target}'. Expected IP:PORT.")
         
         # build output handlers
         for out_name, out_cfg in self.outputs.items():

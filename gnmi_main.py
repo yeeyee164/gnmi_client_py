@@ -8,7 +8,8 @@ if __name__ == '__main__':
     args = build_args()
 
     cfg = config_builder(args)
-    print(f'Config built: {cfg}')
+    if args.debug:
+        print(f"given config:\n{cfg}")
 
     manager = SubscriptionManager(cfg=cfg)
     manager.run_all()
