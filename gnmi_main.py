@@ -1,7 +1,7 @@
 # -*- encoding: utf-8 -*-
 
-from gnmi_manager import SubscriptionManager
 from ui.cmd import build_args, config_builder
+from managers.manager import ManagerFactory
 
 if __name__ == '__main__':
 
@@ -11,5 +11,6 @@ if __name__ == '__main__':
     if args.debug:
         print(f"given config:\n{cfg}")
 
-    manager = SubscriptionManager(cfg=cfg)
+    # manager = SubscriptionManager(cfg=cfg)
+    manager = ManagerFactory.create_manager(args.operation, cfg=cfg)
     manager.run_all()
