@@ -9,7 +9,7 @@ from util.encoding import str_to_bytes
 
 NANOSECOND = 1000000000
 
-class GNMISession:
+class GNMISubscribeSession:
     """
     Handles a single gNMI connection to a single target.
     It doesn't know or care about other threads - need to handle critical sections.
@@ -114,12 +114,6 @@ class GNMISession:
                         break
                         
                     parsed_data = telemetryParser(raw_response)
-                    # Test: printing received data
-                    # print(json.dumps(parsed_data, indent=2))
-
-                    # Note: In a real app, you might want to push this data to a Thread Queue 
-                    # or write it to a database instead of just printing it.
-                    # print(f"[{self.target_ip}] Data received!") 
 
                     self.data_queue.put({
                         'session_id': self.session_id,

@@ -1,6 +1,6 @@
-# gNMI Subscription Client (Python)
+# gNMI Client (Python)
 
-A lightweight Python-based gNMI client designed to handle `Subscribe` requests across multiple network targets. This tool supports various subscription modes and provides flexible configuration interfaces via the Command Line Interface (CLI) or YAML configuration files.
+A lightweight Python-based gNMI client designed to handle defined requests across multiple network targets. This tool supports various subscription modes and provides flexible configuration interfaces via the Command Line Interface (CLI) or YAML configuration files.
 
 ## Features
 
@@ -54,31 +54,45 @@ python main.py --target 10.0.0.1:57400 --path /interfaces \
 
 If you provide the `-c` or `--config` flag, the client will ignore other CLI arguments and use the settings defined in the YAML file.
 
-**Example `config.yaml`:**
+**Example of [request_exp_named_sub.yaml](request_exp_named_sub.yaml) :**
 ```yaml
-targets: 
-  - "10.0.0.1:57400"
-  - "10.0.0.2:57400"
-encoding: "json_ietf"
-username: "admin"
-password: "password123"
-times: 1 # denotes how many clients would you want to spawn - default is 1
 debug: false
-prefix: ""
-subscribe:
-  mode: "stream"
-  update_only: false
-  subscription:
-    paths: 
-      - "/interfaces/interface"
-      - "/system/config"
-    mode: "sample"
-    sample_interval: 60
+
+subscriptions:
+  interfaces_B:
+    mode: "stream"
+    encoding: "json_ietf"
+    subscription:
+      path:
+      - '/interfaces/interface[name="mgmt0"]/state/counters'
+      - '/interfaces/interface[name="te0/2"]/state'
+      mode: "sample"
+      sample_interval: 90 # in seconds
+
+  interfaces:
+    mode: "stream"
+    encoding: "json_ietf"
+    subscription:
+      path:
+      - '/interfaces/interface[name="te0/12"]/state/counters'
+      - '/interfaces/interface[name="te0/13"]/state/counters'
+      mode: "sample"
+      sample_interval: 100 # in seconds
+        
+targets:
+  10.1.11.101:9339:
+    subscriptions:
+      - interfaces
+      - interfaces_B
+    username: "admin"
+    password: "admin123"
+    update_only: false
+
 outputs:
-  default_output:
-    type: "file"
-    file-type: "stdout"
-    format: "json"
+  log_file:
+    type: file
+    file-type: telemetry_res.json
+    format: json
 ```
 
 **Run with config:**
