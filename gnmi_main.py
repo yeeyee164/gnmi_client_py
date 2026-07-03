@@ -11,6 +11,10 @@ if __name__ == '__main__':
     if args.debug:
         print(f"given config:\n{cfg}")
 
-    # manager = SubscriptionManager(cfg=cfg)
-    manager = ManagerFactory.create_manager(args.operation, cfg=cfg)
+    # select the operation
+    if len(cfg.sessions):
+        operation = cfg.sessions[0].operation
+    else: operation = args.operation
+
+    manager = ManagerFactory.create_manager(operation, cfg=cfg)
     manager.run_all()

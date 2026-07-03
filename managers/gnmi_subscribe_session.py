@@ -121,7 +121,6 @@ class GNMISubscribeSession:
                         'subscription_name' : self.subscription_name,
                         'data': parsed_data
                     })
-                    print(f'[Worker] enqueued data {parsed_data} into queue. size is {self.data_queue.qsize()}')
                     
         except Exception as e:
             traceback.print_exception(e)

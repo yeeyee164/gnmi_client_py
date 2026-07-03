@@ -2,46 +2,6 @@ from abc import ABC, abstractmethod
 
 from modules.output import OutputHandler
 from ui.cmd import ParsedConfig
-from .gnmi_manager import UnaryManager, SubscriptionManager
-
-class ManagerFactory:
-    __unary_list = ['get', 'set', 'capabilities']
-    _managers = {
-        "unary" : UnaryManager,
-        "subscribe" :  SubscriptionManager
-    }
-
-    @staticmethod
-    def create_manager(operation: str, cfg: ParsedConfig):
-        operation = operation.lower()
-        if operation in ManagerFactory.__unary_list:
-            mode = 'unary'
-        else: mode = operation
-
-        manager_class = ManagerFactory._managers.get(mode.lower())
-        if not manager_class:
-            raise ValueError(f'Unknown manager type: {mode}')
-        
-        # instantiating class
-        if manager_class == UnaryManager:
-            # Import unary workers lazily to avoid importing heavy deps at module import time
-            try:
-                from . import gnmi_unary_worker as guw
-            except Exception as e:
-                raise RuntimeError("Unary workers could not be imported. Ensure dependencies (pygnmi) are installed.") from e
-
-            if operation == 'get':
-                return manager_class(cfg, guw.GetWorker)
-            elif operation == 'set':
-                return manager_class(cfg, guw.SetWorker)
-            elif operation == 'capabilities':
-                return manager_class(cfg, guw.CapabilitiesWorker)
-            else:
-                raise ValueError(f'failed to pick a manager for operation: {operation}')
-        elif manager_class == SubscriptionManager:
-            return manager_class(cfg)
-        else:
-            raise ValueError(f'failed to pick a manager for operation: {operation}')
 
 
 class BaseRPCManager(ABC):
@@ -84,3 +44,38 @@ class BaseRPCManager(ABC):
             run_all sets up RPC sessions which previously created by `build_sessions`.
         """
         pass
+
+class ManagerFactory:
+    __unary_list = ['get', 'set', 'capabilities']
+
+    @staticmethod
+    def create_manager(operation: str, cfg: ParsedConfig):
+        operation = operation.lower()
+        if operation in ManagerFactory.__unary_list:
+            mode = 'unary'
+        else: mode = operation
+
+        # Lazy load the managers to prevent circular imports!
+        if mode == 'unary':
+            from .gnmi_manager import UnaryManager
+            
+            try:
+                from . import gnmi_unary_worker as guw
+            except Exception as e:
+                raise RuntimeError("Unary workers could not be imported. Ensure dependencies (pygnmi) are installed.") from e
+
+            if operation == 'get':
+                return UnaryManager(cfg, guw.GetWorker)
+            elif operation == 'set':
+                return UnaryManager(cfg, guw.SetWorker)
+            elif operation == 'capabilities':
+                return UnaryManager(cfg, guw.CapabilitiesWorker)
+            else:
+                raise ValueError(f'failed to pick a manager for operation: {operation}')
+                
+        elif mode == 'subscribe':
+            from .gnmi_manager import SubscriptionManager
+            return SubscriptionManager(cfg)
+            
+        else:
+            raise ValueError(f'Unknown manager type: {mode}')

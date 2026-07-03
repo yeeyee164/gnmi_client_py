@@ -17,9 +17,9 @@ subscribe:
   update_only: false
   
   subscription:
-    paths:
-      - '/interfaces/interface[name="te0/3"]/state'
-      - '/interfaces/interface[name="te0/222"]/state'
+    path:
+      - '/interfaces/interface[name="TenGi0/1"]/state'
+      - '/interfaces/interface[name="TenGi0/3"]/state/counters'
 
 outputs:
   log_file:
