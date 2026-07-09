@@ -7,6 +7,7 @@ import concurrent.futures
 from .gnmi_subscribe_session import GNMISubscribeSession
 from ui.cmd import ParsedConfig
 from .manager import BaseRPCManager
+from modules.validate import ValidateConfig
 
 class SubscriptionManager(BaseRPCManager):
     """
@@ -15,6 +16,7 @@ class SubscriptionManager(BaseRPCManager):
 
     def __init__(self, cfg: ParsedConfig):
         super().__init__(cfg)
+        ValidateConfig.validate(cfg)
         self.threads = []            # Holds the active Thread objects
 
         #common channel for worker results
@@ -106,6 +108,7 @@ class UnaryManager(BaseRPCManager):
 
     def __init__(self, cfg: ParsedConfig, worker_class):
         super().__init__(cfg)
+        ValidateConfig.validate(cfg)
         # Injects GetWorker, SetWorker, etc...
         self.worker_class = worker_class
 
