@@ -124,6 +124,11 @@ class CLIConfigBuilder(ConfigBuilder):
         targets = self.args.target or []
         sessions = []
 
+        # set default info
+        prefix = ''
+        if global_op in ('get', 'subscribe'):
+            prefix = self.args.prefix
+
         updates, replaces, deletes = [], [], []
         if global_op == 'set':
             updates = self._parse_kv(getattr(self.args, 'update', []))
@@ -138,7 +143,7 @@ class CLIConfigBuilder(ConfigBuilder):
                     operation=global_op,
                     mode=mode,
                     subscription_name="cli_default",
-                    prefix=self.args.prefix,
+                    prefix=prefix,
                     encoding=self.args.encoding,
                     username=self.args.username,
                     password=self.args.password,
