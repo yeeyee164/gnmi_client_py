@@ -16,5 +16,6 @@ if __name__ == '__main__':
         operation = cfg.sessions[0].operation
     else: operation = args.operation
 
-    manager = ManagerFactory.create_manager(operation, cfg=cfg)
+    # run configured client
+    manager = ManagerFactory.create_nb_client_manager(operation, cfg=cfg)
     manager.run_all()

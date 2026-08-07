@@ -1,6 +1,6 @@
 import pytest
 #from specs.gnmi.gnmi_pb2 import Path, PathElem
-from pygnmi.spec.v080.gnmi_pb2 import Path, PathElem
+from specs.gnmi.gnmi_pb2 import Path, PathElem
 from modules.path import (
     parse_path,
     _parse_xpath_keys,

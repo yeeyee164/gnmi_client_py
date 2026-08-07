@@ -2,11 +2,14 @@ import time
 import json
 import traceback
 import hashlib
+import grpc
+import traceback
+import queue
 
-from pygnmi.client import gNMIclient, telemetryParser
-from util.encoding import str_to_bytes
+from specs.client import GNMIClient, gnmi_pb2
+from util.encoding import str_to_bytes, STR_TO_GNMI_ENCODING
 
-
+#define some global variables
 NANOSECOND = 1000000000
 
 class GNMISubscribeSession:
@@ -16,7 +19,8 @@ class GNMISubscribeSession:
     """
 
     def __init__(self, target_ip, target_port, paths, mode, data_queue, subscription_name,
-                 username="", password="", prefix="", encoding="json_ietf", **kwargs):
+                 username="", password="", prefix="", encoding="json_ietf",
+                 insecure=False, **kwargs):
         self.target_ip = target_ip
         self.target_port = target_port
         self.username = username
@@ -25,6 +29,7 @@ class GNMISubscribeSession:
         self.paths = paths
         self.mode = mode
         self.encoding = encoding
+        self.insecure = insecure
         self.subscription_name = subscription_name
 
         # queue from manager
@@ -33,7 +38,6 @@ class GNMISubscribeSession:
         # build necessary payloads
         self.args = kwargs
         self.tgt_info = self._build_router_info()
-        self.payload = self._build_payload(kwargs)
 
         # set session id
         raw_id_str = f"{target_ip}:{target_port}:{subscription_name}:{time.time()}"
@@ -41,51 +45,49 @@ class GNMISubscribeSession:
         
         # State control flag for clean thread shutdown
         self.is_running = False 
+        # Thread-safe queue for manual POLL triggers
+        self.poll_queue = queue.Queue()
 
-    def _build_payload(self, args):
-        """
-            TODO: make a request builder
-        """
+    def _build_subscribe_request(self) -> gnmi_pb2.SubscribeRequest:
+        """ Constructs the SubscribeRequest object """
+        sub_list = gnmi_pb2.SubscriptionList()
 
-        # subscribe mode
-        mode = self.mode
-        subscribe_req = {
-            'subscription':[
-                {
-                    "path": p
-                } for p in self.paths
-            ],
-            'mode' : f'{mode}',
-            'encoding': f'{self.encoding.lower()}',
-        }
+        # determine mode
+        if self.mode.lower() == 'once':
+            sub_list.mode = gnmi_pb2.SubscriptionList.ONCE
+        elif self.mode.lower() == 'poll':
+            sub_list.mode = gnmi_pb2.SubscriptionList.POLL
+        else:
+            sub_list.mode = gnmi_pb2.SubscriptionList.STREAM
 
-        # additional arguments
-        if self.prefix != '':
-            subscribe_req['prefix'] = self.prefix
-        
-        subscribe_req['update_only'] = self.args.get('update_only', False)
+        # determine encoding        
+        sub_list.encoding = STR_TO_GNMI_ENCODING[self.encoding.lower()]
 
-        # handle stream modes
-        if mode.lower() == 'stream':
-            si = self.args.get('sample_interval', 0) * NANOSECOND
-            stream_mode_var = {
-                'stream_mode': args.get('sub_mode', 'target_defined'),
-                'sample_interval': si,
-            }
+        sub_list.updates_only = self.args.get('updates_only', False)
 
-            if 'stream_mode' in stream_mode_var:
-                smode = stream_mode_var['stream_mode']
-                sreq = subscribe_req['subscription']
-                for subscription in sreq:
-                    subscription['mode'] = smode
+        # build individual subscriptions
+        for path_obj in self.paths:
+            sub = sub_list.subscription.add()
+            sub.path.CopyFrom(path_obj)
 
-                if smode.lower() == 'sample':
-                    for subscription in sreq:
-                        subscription['sample_interval'] = stream_mode_var['sample_interval']
+            if self.mode.lower() == 'stream':
+                smode = self.args.get('sub_mode', 'sample').lower()
+                if smode == 'sample':
+                    sub.mode = gnmi_pb2.SubscriptionMode.SAMPLE
+                    sub.sample_interval = self.args.get('sample_interval', 0) * NANOSECOND
+                elif smode == 'on_change':
+                    sub.mode = gnmi_pb2.SubscriptionMode.ON_CHANGE
+                else:
+                    sub.mode = gnmi_pb2.SubscriptionMode.TARGET_DEFINED
 
-        return subscribe_req
+        request = gnmi_pb2.SubscribeRequest(subscribe=sub_list)
+        return request
 
     def _build_router_info(self):
+        """
+        Create router information for Subscribe RPC.
+        It contains target address and account information.
+        """
         router = {
             'target': (self.target_ip, self.target_port)
         }
@@ -98,30 +100,46 @@ class GNMISubscribeSession:
             
     def start(self):
         self.is_running = True
-        payload = self.payload
         print(f"[Worker {self.session_id} | {self.target_ip}]"
               f" Starting '{self.subscription_name}' ({self.mode.upper()}) session...")
 
         target = self.tgt_info['target']
+
+        def request_generator():
+            yield self._build_subscribe_request()
+
+            # keep generator alive
+            while self.is_running:
+                try:
+                    # Wait for a trigger from the poll_queue
+                    trigger = self.poll_queue.get(timeout=0.5)
+                    if trigger == "POLL":
+                        # create a new Poll message
+                        poll_req = gnmi_pb2.SubscribeRequest(poll=gnmi_pb2.Poll())
+                        yield poll_req
+                except queue.Empty:
+                    continue
         
         try:
-            with gNMIclient(target=target, username=self.username, password=self.password, insecure=True) as gc:
-                response_iterator = gc.subscribe(subscribe=payload)
+            with GNMIClient(target=target, username=self.username, password=self.password, insecure=self.insecure) as client:
+                response_stream = client.subscribe(request_generator())
                 
-                for raw_response in response_iterator:
+                for raw_response in response_stream:
                     # Break the loop if the Manager tells this thread to stop
                     if not self.is_running:
+                        response_stream.cancel()
                         break
                         
-                    parsed_data = telemetryParser(raw_response)
-
                     self.data_queue.put({
                         'session_id': self.session_id,
                         'target': ":".join([self.target_ip, str(self.target_port)]),
                         'subscription_name' : self.subscription_name,
-                        'data': parsed_data
+                        'rpc' : 'subscribe',
+                        'data': raw_response
                     })
                     
+        except grpc.RpcError as e:
+            print(f"[Worker {self.session_id} | {self.target_ip}] gRPC Error  '{e.code()}': {e.details()}")
         except Exception as e:
             traceback.print_exception(e)
             print(f"[Worker {self.session_id} | {self.target_ip}] Error in '{self.subscription_name}': {e}")
@@ -130,3 +148,10 @@ class GNMISubscribeSession:
     
     def stop(self):
         self.is_running = False
+
+    def trigger_poll(self):
+        """By calling this method, you can inject empty Poll message only if you have requested Poll."""
+        if self.mode.lower() == 'poll':
+            self.poll_queue.put("POLL")
+        else:
+            print(f"[Worker {self.session_id} | {self.target_ip}] Ignored POLL trigger. Session is in '{self.mode}' mode.")

@@ -10,7 +10,7 @@ All of functions referenced at https://github.com/openconfig/gnmic
 
 import re
 from typing import List, Optional, Dict, Tuple
-from pygnmi.spec.v080.gnmi_pb2 import Path, PathElem
+from specs.gnmi.gnmi_pb2 import Path, PathElem
 
 # Custom Exceptions to match Go errors
 class MalformedXPathError(Exception): pass

@@ -18,7 +18,7 @@ class BaseRPCManager(ABC):
         self.debug = cfg.debug
         self.outputs = cfg.outputs
 
-        self.sessions = []           # Holds the GNMISubscribeSession objects
+        self.sessions = [] # Holds the GNMISubscribeSession objects
         self.output_handlers = []
 
         # Build output handlers once for all managers
@@ -49,7 +49,12 @@ class ManagerFactory:
     __unary_list = ['get', 'set', 'capabilities']
 
     @staticmethod
-    def create_manager(operation: str, cfg: ParsedConfig):
+    def create_nb_client_manager(operation: str, cfg: ParsedConfig):
+        """
+        By calling this class method, you can instantiate Northbound Protocol clients.
+        
+        Currently, only gNMI is supported.
+        """
         operation = operation.lower()
         if operation in ManagerFactory.__unary_list:
             mode = 'unary'
@@ -62,7 +67,7 @@ class ManagerFactory:
             try:
                 from . import gnmi_unary_worker as guw
             except Exception as e:
-                raise RuntimeError("Unary workers could not be imported. Ensure dependencies (pygnmi) are installed.") from e
+                raise RuntimeError("Unary workers could not be imported.") from e
 
             if operation == 'get':
                 return UnaryManager(cfg, guw.GetWorker)

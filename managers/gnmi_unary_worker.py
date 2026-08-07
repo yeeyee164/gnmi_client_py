@@ -1,6 +1,8 @@
 import time
 import hashlib
-from pygnmi.client import gNMIclient
+import grpc
+
+from specs.client import GNMIClient
 from util.encoding import str_to_bytes
 
 class BaseUnaryWorker:
@@ -8,13 +10,15 @@ class BaseUnaryWorker:
     Base class for single request-response gNMI workers
     """
     def __init__(self, target_ip, target_port, username="",
-                 password="", prefix="", encoding="json_ietf", **kwargs):
+                 password="", prefix="", encoding="json_ietf", 
+                 insecure=False, **kwargs):
         self.target_ip = target_ip
         self.target_port = target_port
         self.username = username
         self.password = password
         self.prefix = prefix
         self.encoding = encoding
+        self.insecure = insecure
 
         self.target_tuple = (self.target_ip, self.target_port)
 
@@ -33,40 +37,69 @@ class BaseUnaryWorker:
 
 class CapabilitiesWorker(BaseUnaryWorker):
     def start(self):
-        print(f"[Worker {self.target_ip}] Requesting Capabilities...")
-        with gNMIclient(target=self.target_tuple, username=self.username,
-                        password=self.password, insecure=True) as gc:
-            result = gc.capabilities()
-            return self._format_result("Capabilities", result)
+        print(f"[Worker(Capabilities) {self.target_ip}] Requesting Capabilities...")
+
+        try:
+            with GNMIClient(target=self.target_tuple, username=self.username,
+                            password=self.password, insecure=self.insecure) as client:
+                result = client.capabilities()
+                return self._format_result("capabilities", result)
+                
+        except grpc.RpcError as e:
+            print(f'[Worker(Capabilities) {self.target_ip}] gRPC error: {e.code()} - {e.details()}')
+            return None
+
+    def __str__(self):
+        return "Capabilities"
 
 class GetWorker(BaseUnaryWorker):
     def __init__(self, target_ip, target_port, paths, **kwargs):
         super().__init__(target_ip, target_port, **kwargs)
         self.paths = paths
-    
+
     def start(self):
-        print(f"[Worker {self.target_ip}] Requesting Get...")
-        with gNMIclient(target=self.target_tuple, username=self.username,
-                        password=self.password, insecure=True, encoding=self.encoding) as gc:
-            result = gc.get(prefix=self.prefix, path=self.paths, encoding=self.encoding)
-            return self._format_result("Get", result)
+        print(f"[Worker(Get) {self.target_ip}] Requesting Get...")
+
+        try:
+            with GNMIClient(target=self.target_tuple, username=self.username,
+                            password=self.password, insecure=self.insecure) as client:
+                result = client.get(paths=self.paths, encoding=self.encoding)
+                return self._format_result("get", result)
+                
+        except grpc.RpcError as e:
+            print(f'[Worker(Get) {self.target_ip}] gRPC error: {e.code()} - {e.details()}')
+            return None
+
+    def __str__(self):
+        return "Get"
 
 class SetWorker(BaseUnaryWorker):
     def __init__(self, target_ip, target_port, updates=None, replaces=None, deletes=None, **kwargs):
         """
         In SetRequest, it handles three case of requests
-        * update -> [('path', 'leaf', 'value'), ...]
-        * delete -> [('path', 'leaf'), ...]
-        * replace -> [('path', 'leaf', 'value'), ...]
+        * update -> [('path', 'value'), ...]
+        * delete -> ['path', ...]
+        * replace -> [('path', 'value'), ...]
         """
         super().__init__(target_ip, target_port, **kwargs)
-        self.updates = updates
-        self.replaces = replaces
-        self.deletes = deletes
-    
+        self.updates = updates or []
+        self.replaces = replaces or []
+        self.deletes = deletes or []
+
     def start(self):
-        print(f"[Worker {self.target_ip}] Requesting Set...")
-        with gNMIclient(target=self.target_tuple, username=self.username,
-                        password=self.password, insecure=True, encoding=self.encoding) as gc:
-            result = gc.set(prefix=self.prefix, update=self.updates, replace=self.replaces, delete=self.deletes)
-            return self._format_result("Set", result)
+        print(f"[Worker(Set) {self.target_ip}] Requesting Set...")
+        try:
+            with GNMIClient(target=self.target_tuple, username=self.username,
+                            password=self.password, insecure=self.insecure) as client:
+                result = client.set(prefix=self.prefix,
+                                    update=self.updates,
+                                    replace=self.replaces,
+                                    delete=self.deletes,
+                                    encoding=self.encoding)
+                return self._format_result("Set", result)
+        except grpc.RpcError as e:
+            print(f"[Worker(Set) {self.target_ip}] gRPC Error: {e.code()} - {e.details()}")
+            return None
+
+    def __str__(self):
+        return "Set"

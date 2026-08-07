@@ -1,4 +1,5 @@
 debug: false
+insecure: true
 
 subscriptions:
   interfaces_B:
@@ -25,7 +26,6 @@ targets:
   10.1.11.101:9339:
     subscriptions:
       - interfaces
-      - interfaces_B
     username: "admin"
     password: "Frontier12#"
     update_only: false
