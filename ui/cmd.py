@@ -63,12 +63,16 @@ class ParsedConfig:
     outputs: Dict                 # Output definitions
     # operation: str = "subscribe"  # Top-level operation type for Manager selection
     targets: List[str] = field(default_factory=list) # List of "IP:PORT" strings
+    insecure: bool = False        # Insecure connection
     debug: bool = False           # Global debug flag
 
     def __str__(self):
         session_strs = "\n".join([str(s) for s in self.sessions])
         # return f"ParsedConfig(operation={self.operation} debug={self.debug}, outputs={self.outputs}, sessions=[\n{session_strs}\n])"
-        return f"ParsedConfig(debug={self.debug}, outputs={self.outputs}, sessions=[\n{session_strs}\n])"
+        return f"""ParsedConfig(debug={self.debug}, insecure={self.insecure},
+    outputs={self.outputs}, sessions=[\n{session_strs}\n]
+)
+"""
 
 class ConfigBuilder(ABC):
     @abstractmethod
@@ -81,17 +85,22 @@ class CLIConfigBuilder(ConfigBuilder):
         self.args = args
     
     def _parse_kv(self, kv_list):
-        """Parse Set payload argument safely (path=value or path::value"""
+        """
+        Parse Set payload argument safely (path=value or path:::type:::value)
+        """
 
         res = []
         if not kv_list: return res
         for item in kv_list:
-            if '::' in item:
-                p, v = item.split('::', 1)
+            # extract the last element
+            
+            if ':::' in item:
+                p, v = item.split(':::', 1)
             elif '=' in item:
                 p, v = item.split('=', 1)
             else:
-                p, v = item.split(':', 1)
+                #consider it as 'empty'
+                p, v = item, ""
             
             # Attempt to parse values as JSON/bools/ints if applicable, else keep as string
             try:
@@ -139,7 +148,7 @@ class CLIConfigBuilder(ConfigBuilder):
             for target in targets:
                 sessions.append(SessionConfig(
                     target=target,
-                    paths=self.args.path or [],
+                    paths=getattr(self.args, "path", []),
                     operation=global_op,
                     mode=mode,
                     subscription_name="cli_default",
@@ -161,6 +170,7 @@ class CLIConfigBuilder(ConfigBuilder):
             outputs=outputs,
             targets=targets,
             debug=self.args.debug,
+            insecure=self.args.insecure
             # operation=global_op
         )
 
@@ -188,6 +198,7 @@ class FileConfigBuilder(ConfigBuilder):
         global_times = d.get('times', 1)
         global_prefix = d.get('prefix', '')
         debug = d.get('debug', False)
+        insecure = d.get('insecure', False)
         
         # Output parsing
         outputs = d.get('outputs', {
@@ -324,22 +335,25 @@ class FileConfigBuilder(ConfigBuilder):
                     deletes=deletes
                 ))
 
-        return ParsedConfig(sessions=sessions, targets=targets, outputs=outputs, debug=debug)
+        return ParsedConfig(sessions=sessions, targets=targets,
+                            outputs=outputs, debug=debug, insecure=insecure)
 
 def build_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="gNMI Subscription Client")
 
     parser.add_argument('-c', '--config', default='', help='Path to YAML configuration file')
     parser.add_argument('-t', '--target', action='append', help="List of targets in IP:PORT format")
-    parser.add_argument('--path', action='append', help="List of gNMI Paths")
     parser.add_argument('-d', '--debug', help="Debugging this script", action='store_true')
-    parser.add_argument('--times', default=1, type=int, help="Multiply targets")
+    parser.add_argument('--times', default=1, type=int, help="Generate duplicated requests - only use for testing")
     parser.add_argument('--username', default='', help="Username")
     parser.add_argument('--password', default='', help="Password")
     parser.add_argument('-e', '--encoding', default='json_ietf',
                         help="encoding formats defined at gNMI", 
-                        choices=['json', 'json_ietf', 'bytes', 'proto'])
+                        choices=['json', 'json_ietf', 'bytes', 'proto', 'ascii'])
+    parser.add_argument('-i', '--insecure', default=False,
+                        help="use insecure connection if set True")
 
+    # output specifiers
     parser.add_argument('--output-type', default='file', help="Type of output data.")
     parser.add_argument('--output-file-type', default='stdout', help="direction of output data.")
     parser.add_argument('--output-format', default='json', help="Specify output format.")

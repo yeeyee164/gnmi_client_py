@@ -4,6 +4,10 @@ A lightweight Python-based gNMI client designed to handle defined requests acros
 
 ## Features
 
+- **Unary Services**:
+  - `Capability`
+  - `Get`
+  - `SET`(TODO)
 - **Multiple Subscription Modes**:
   - `ONCE`: Retrieve a single snapshot of the requested paths.
   - `POLL`: Periodic retrieval of data.
@@ -11,7 +15,8 @@ A lightweight Python-based gNMI client designed to handle defined requests acros
     - `SAMPLE`: Data sent at a regular interval.
     - `ON_CHANGE`: Data sent only when a value changes.
     - `TARGET_DEFINED`: Mode defined by the network device.
-- **Multi-Target Support**: Ability to spawn multiple clients across a list of targets simultaneously using the `--times` multiplier.
+- **Multi-Target Support**: Ability to spawn multiple clients across a list of targets simultaneously using the `--target` option.
+- **Duplicated Requests**: Ability to request multiple Requests using the `--times` multiplier.
 - **Flexible Configuration**: 
   - Dynamic CLI arguments for quick testing.
   - YAML-based configuration files for complex, repeatable deployments.
@@ -19,11 +24,7 @@ A lightweight Python-based gNMI client designed to handle defined requests acros
 
 ## Installation
 
-Ensure you have Python 3.7+ installed. You will need the `PyYAML` library to use YAML configuration files.
-
-```bash
-pip install pyyaml
-```
+Ensure you have Python 3.7+ installed.
 
 ## Usage
 
@@ -31,23 +32,32 @@ The client can be operated in two primary ways: through command-line arguments o
 
 ### 1. Using Command Line Interface (CLI)
 
+**Example: Single request (Capability Request)**
+```bash
+python main.py --target 10.0.0.1:57400 --mode capabilities
+```
+
+**Example: Single request (Get Request)**
+```bash
+python main.py --target 10.0.0.1:57400 --mode get --path '/interfaces/interface[name=hello]'
+```
+
 **Example: Single request (ONCE mode)**
 ```bash
-python main.py --target 10.0.0.1:57400 --path /interfaces/interface --mode once
+python main.py --target 10.0.0.1:57400 subscribe --path '/interfaces/interface' --mode once
 ```
 
 **Example: Streaming updates (STREAM mode) with a 30s sample interval**
 ```bash
-python main.py --target 10.0.0.1:57400 --target 10.0.0.2:57400 \
-               --path /system/config \
-               stream --sub-mode sample --sample-interval 30
+python3 gnmi_main.py --target 10.0.0.1:57400 --target 10.0.0.2:57400 \
+               subscribe --mode stream --sub-mode sample --sample-interval 30 --path '/system/config' 
 ```
 
 **Example: Custom Output Format**
 ```bash
-python main.py --target 10.0.0.1:57400 --path /interfaces \
+python3 gnmi_main.py --target 10.0.0.1:57400 \
                --output-format json --output-file-type stdout \
-               once
+               subscribe --mode once --path '/interfaces'
 ```
 
 ### 2. Using YAML Configuration
@@ -97,4 +107,5 @@ outputs:
 
 **Run with config:**
 ```bash
-python main.py --config config.yaml
+python3 gnmi_main.py --config config.yaml
+```

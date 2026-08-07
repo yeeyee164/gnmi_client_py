@@ -3,6 +3,7 @@ import threading
 import queue
 import json
 import concurrent.futures
+import modules.path as mp
 
 from .gnmi_subscribe_session import GNMISubscribeSession
 from ui.cmd import ParsedConfig
@@ -11,7 +12,7 @@ from modules.validate import ValidateConfig
 
 class SubscriptionManager(BaseRPCManager):
     """
-    Orchestrates multiple GNMISubscribeSession workers using Python threading package.
+    Orchestrates multiple SubscribeSession workers using Python threading package.
     """
 
     def __init__(self, cfg: ParsedConfig):
@@ -22,6 +23,9 @@ class SubscriptionManager(BaseRPCManager):
         #common channel for worker results
         # this queue supports Locking mechanism
         self.data_queue = queue.Queue()
+
+        #global config
+        self.insecure = cfg.insecure
 
     def build_sessions(self):
         """Parses the targets and instantiates the Worker objects."""
@@ -38,15 +42,25 @@ class SubscriptionManager(BaseRPCManager):
                         'update_only' : sc.update_only
                     }
 
+                    # transform string path into Path
+                    gnmiPath = []
+                    for path in sc.paths:
+                        data = mp.parse_path(path)
+                        if data is not None:
+                            gnmiPath.append(data) 
+                        else:
+                            raise mp.EmptyPathElemNameError
+
                     session = GNMISubscribeSession(
                         target_ip=ip,
                         target_port=int(port),
-                        paths=sc.paths,
+                        paths=gnmiPath,
                         data_queue=self.data_queue,
                         mode = sc.mode,
                         encoding=sc.encoding,
                         username=sc.username,
                         password=sc.password,
+                        insecure=self.insecure,
                         prefix=sc.prefix,
                         subscription_name=sc.subscription_name,
                         **args)
@@ -70,6 +84,10 @@ class SubscriptionManager(BaseRPCManager):
             t = threading.Thread(target=session.start, daemon=True)
             self.threads.append(t)
             t.start()
+
+        if any(s.mode.lower() == 'poll' for s in self.sessions):
+            controller_t = threading.Thread(target=self._interactive_poll_controller, daemon=True)
+            controller_t.start()
 
         # The Main Thread blocks here, keeping the script alive and watching for Ctrl+C
         try:
@@ -100,6 +118,36 @@ class SubscriptionManager(BaseRPCManager):
             
         print("[Manager] All sessions cleanly terminated. Goodbye!")
 
+    def _interactive_poll_controller(self):
+        """A simple background CLI to allow users to trigger polls manually."""
+        poll_sessions = [s for s in self.sessions if s.mode.lower() == 'poll']
+        time.sleep(2) # Give streams a moment to connect
+        
+        while True:
+            print("\n" + "="*40)
+            print(" Interactive POLL Controller")
+            print("="*40)
+            for idx, s in enumerate(poll_sessions):
+                print(f"  [{idx}] {s.session_id} - {s.target_ip} ({s.subscription_name})")
+            
+            try:
+                choice = input("\nType a session index to trigger, 'all', or press Enter to refresh: ").strip().lower()
+                if choice == 'all':
+                    for s in poll_sessions:
+                        s.trigger_poll()
+                        print(f"-> Sent POLL to {s.session_id}")
+                elif choice.isdigit():
+                    idx = int(choice)
+                    if 0 <= idx < len(poll_sessions):
+                        poll_sessions[idx].trigger_poll()
+                        print(f"-> Sent POLL to {poll_sessions[idx].session_id}")
+                    else:
+                        print("Invalid index.")
+            except EOFError:
+                break
+            except KeyboardInterrupt:
+                break       
+
 class UnaryManager(BaseRPCManager):
     """
     Orchestrates Unary RPCs (Get, Set, Capabilities) using a ThreadPoolExecutor
@@ -112,17 +160,29 @@ class UnaryManager(BaseRPCManager):
         # Injects GetWorker, SetWorker, etc...
         self.worker_class = worker_class
 
+        # global configs
+        self.insecure = cfg.insecure
+
     def build_sessions(self):
         for sc in self.session_configs:
             try:
+                # transform string path into Path
+                gnmiPath = []
+                for path in sc.paths:
+                    data = mp.parse_path(path)
+                    if data is not None:
+                        gnmiPath.append(data) 
+                    else:
+                        raise mp.EmptyPathElemNameError
                 ip, port = sc.target.split(':')
                 session = self.worker_class(
                     target_ip=ip,
                     target_port=int(port),
-                    paths=sc.paths,
+                    paths=gnmiPath,
                     encoding=sc.encoding,
                     username=sc.username,
                     password=sc.password,
+                    insecure=self.insecure,
                     prefix=sc.prefix
                 )
                 self.sessions.append(session)
@@ -150,5 +210,5 @@ class UnaryManager(BaseRPCManager):
                         for handler in self.output_handlers:
                             handler.write(result)
                 except Exception as exc:
-                    print(f"[Worker {session.target_ip}] generated an exception: {exc}")
+                    print(f"[Worker({self.worker_class}) {session.target_ip}] generated an exception: {exc}")
         self.shutdown()
