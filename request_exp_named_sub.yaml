@@ -1,5 +1,6 @@
 debug: false
 insecure: true
+protocol: "gnmi"
 
 subscriptions:
   interfaces_B:
@@ -29,9 +30,10 @@ targets:
     username: "admin"
     password: "Frontier12#"
     update_only: false
+    insecure: true
 
 outputs:
   log_file:
     type: file
-    file-type: telemetry_res.json
+    file-type: stdout
     format: json

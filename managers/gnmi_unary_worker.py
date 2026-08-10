@@ -4,49 +4,60 @@ import grpc
 
 from specs.client import GNMIClient
 from util.encoding import str_to_bytes
+from managers.client_factory import ClientFactory
+from modules.validate import ValidateConfig
 
 class BaseUnaryWorker:
     """
-    Base class for single request-response gNMI workers
+    Base class for single request-response workers
     """
     def __init__(self, target_ip, target_port, username="",
                  password="", prefix="", encoding="json_ietf", 
-                 insecure=False, **kwargs):
+                 protocol='gnmi', **kwargs):
         self.target_ip = target_ip
         self.target_port = target_port
         self.username = username
         self.password = password
         self.prefix = prefix
         self.encoding = encoding
-        self.insecure = insecure
-
-        self.target_tuple = (self.target_ip, self.target_port)
+        self.protocol = protocol.lower()
+        self.target = f'{self.target_ip}:{self.target_port}'
 
         raw_id_str = f"{target_ip}:{target_port}:{time.time()}"
         self.session_id = hashlib.md5(str_to_bytes(raw_id_str)).hexdigest()[:10]
+
+        # kwargs
+        self.inseucre = kwargs.get('insecure', False)
     
     def _format_result(self, rpc_name, data):
         """Standardizes the output dictionary for the handlers"""
 
         return {
             'session_id': self.session_id,
-            'target': f"{self.target_ip}:{self.target_port}",
+            'target': self.target,
             'rpc': rpc_name,
             'data': data,
         }
 
-class CapabilitiesWorker(BaseUnaryWorker):
+    def _get_client(self):
+        """Asks the factory for a client based on the requested protocol"""
+        return ClientFactory.get_client(
+            protocol=self.protocol, target=self.target, 
+            username=self.username, password=self.password,
+            insecure=self.inseucre
+        )
+
+class CapabilityWorker(BaseUnaryWorker):
     def start(self):
-        print(f"[Worker(Capabilities) {self.target_ip}] Requesting Capabilities...")
+        print(f"[Worker(Capability) {self.target_ip}] Requesting Capability...")
 
         try:
-            with GNMIClient(target=self.target_tuple, username=self.username,
-                            password=self.password, insecure=self.insecure) as client:
-                result = client.capabilities()
-                return self._format_result("capabilities", result)
+            with self._get_client() as client:
+                result = client.capability()
+                return self._format_result("capability", result)
                 
         except grpc.RpcError as e:
-            print(f'[Worker(Capabilities) {self.target_ip}] gRPC error: {e.code()} - {e.details()}')
+            print(f'[Worker(Capability) {self.target_ip}] gRPC error: {e.code()} - {e.details()}')
             return None
 
     def __str__(self):
@@ -61,9 +72,8 @@ class GetWorker(BaseUnaryWorker):
         print(f"[Worker(Get) {self.target_ip}] Requesting Get...")
 
         try:
-            with GNMIClient(target=self.target_tuple, username=self.username,
-                            password=self.password, insecure=self.insecure) as client:
-                result = client.get(paths=self.paths, encoding=self.encoding)
+            with self._get_client() as client:
+                result = client.get(paths=self.paths, encoding=self.encoding, prefix=self.prefix)
                 return self._format_result("get", result)
                 
         except grpc.RpcError as e:
@@ -89,13 +99,11 @@ class SetWorker(BaseUnaryWorker):
     def start(self):
         print(f"[Worker(Set) {self.target_ip}] Requesting Set...")
         try:
-            with GNMIClient(target=self.target_tuple, username=self.username,
-                            password=self.password, insecure=self.insecure) as client:
+            with self._get_client() as client:
                 result = client.set(prefix=self.prefix,
                                     update=self.updates,
                                     replace=self.replaces,
-                                    delete=self.deletes,
-                                    encoding=self.encoding)
+                                    delete=self.deletes)
                 return self._format_result("Set", result)
         except grpc.RpcError as e:
             print(f"[Worker(Set) {self.target_ip}] gRPC Error: {e.code()} - {e.details()}")

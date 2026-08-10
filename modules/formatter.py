@@ -222,7 +222,7 @@ class GNMIFormatter(ProtocolFormatter):
             return self._format_get(raw_data, meta)
         if rpc == 'set':
             return self._format_set(raw_data, meta)
-        if rpc == 'capabilities':
+        if rpc == 'capability':
             return self._format_capability(raw_data, meta)
 
         # If it already forms dict/json, just return itself

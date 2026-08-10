@@ -21,7 +21,7 @@ class SessionConfig:
     paths: List[str]      # List of gNMI paths
     subscription_name: str # For logging/tracking
 
-    operation: str = "subscribe" # subscribe, get, set, capabilities
+    operation: str = "subscribe" # subscribe, get, set, capability
     mode: str = ""         # STREAM, ONCE, POLL
 
     # 'Global' options
@@ -37,7 +37,7 @@ class SessionConfig:
 
     # STREAM specific attributes
     sub_mode: Optional[str] = None
-    sample_interval: int = 90
+    sample_interval: int = 0
 
     # Set specific attributes
 
@@ -49,9 +49,9 @@ class SessionConfig:
     deletes: list = field(default_factory=list)
 
     def __str__(self):
-        return f"""SessionConfig(target={self.target}, path={self.paths}, operation={self.operation}, mode={self.mode}, 
+        return f"""\t\tSessionConfig(target={self.target}, path={self.paths}, operation={self.operation}, mode={self.mode}, 
             subscription_name={self.subscription_name}, prefix={self.prefix}, encoding={self.encoding}, 
-            username={self.username}, update_only={self.update_only}, 
+            username={self.username}, update_only={self.update_only}, insecure={self.insecure},
             times={self.times}, sub_mode={self.sub_mode}, sample_interval={self.sample_interval})"""
 
 
@@ -167,7 +167,7 @@ class CLIConfigBuilder(ConfigBuilder):
                     update_only=getattr(self.args, "update_only", False),
                     times=times,
                     sub_mode=getattr(self.args, "sub_mode", None),
-                    sample_interval=getattr(self.args, "sample_interval", 90),
+                    sample_interval=getattr(self.args, "sample_interval", 0),
                     updates=updates,
                     replaces=replaces,
                     deletes=deletes
@@ -268,7 +268,7 @@ class FileConfigBuilder(ConfigBuilder):
                             update_only=t_update_only,
                             times=t_times,
                             sub_mode=sub_details.get('mode', 'target_defined'),
-                            sample_interval=sub_details.get('sample_interval', 90)
+                            sample_interval=sub_details.get('sample_interval', 0)
                         ))
 
             # --- PARSE OLD FORMAT (request_exp.yaml) ---
@@ -296,10 +296,10 @@ class FileConfigBuilder(ConfigBuilder):
                         update_only=sub_cfg.get('update_only', False),
                         times=t_times,
                         sub_mode=sub_details.get('mode', 'target_defined'),
-                        sample_interval=sub_details.get('sample_interval', 90)
+                        sample_interval=sub_details.get('sample_interval', 0)
                     ))
 
-        elif global_operation in ['get', 'capabilities']:
+        elif global_operation in ['get', 'capability']:
             # Unary Operation for Get and Capabilities
             targets_list = d.get('targets', [])
             paths = d.get('path', [])
@@ -367,6 +367,9 @@ def build_args() -> argparse.Namespace:
                         choices=['json', 'json_ietf', 'bytes', 'proto', 'ascii'])
     parser.add_argument('-i', '--insecure', default=False,
                         help="use insecure connection if set True")
+
+    # TODO: it SHOULD be subparser; because each protocol may have 
+    # different arguments/methods
     parser.add_argument('-p', '--protocol', default='gnmi', choices=['gnmi', 'netconf', 'restconf'],
                         help="set Northbound Protocol client. Default is gNMI")
 
@@ -379,7 +382,7 @@ def build_args() -> argparse.Namespace:
     subparsers = parser.add_subparsers(dest='operation', help="specify gNMI RPC operation")
 
     # UNARY: Capabilities
-    parser_cap = subparsers.add_parser('capabilities', help='execute CAPABILITIES RPC')
+    parser_cap = subparsers.add_parser('capability', help='execute CAPABILITIES RPC')
     
     # UNARY: Get
     parser_get = subparsers.add_parser('get', help='execute GET RPC')
