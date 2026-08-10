@@ -23,13 +23,17 @@ class SessionConfig:
 
     operation: str = "subscribe" # subscribe, get, set, capabilities
     mode: str = ""         # STREAM, ONCE, POLL
-    
+
+    # 'Global' options
+
     prefix: str = ""
     encoding: str = "json_ietf"
     username: str = ""
     password: str = ""
     update_only: bool = False
     times: int = 1
+    insecure: bool = False
+    protocol: str = "gnmi"
 
     # STREAM specific attributes
     sub_mode: Optional[str] = None
@@ -63,6 +67,7 @@ class ParsedConfig:
     outputs: Dict                 # Output definitions
     # operation: str = "subscribe"  # Top-level operation type for Manager selection
     targets: List[str] = field(default_factory=list) # List of "IP:PORT" strings
+    protocol: str = "gnmi"        # Northbound Protocol - default is gNMI
     insecure: bool = False        # Insecure connection
     debug: bool = False           # Global debug flag
 
@@ -70,7 +75,8 @@ class ParsedConfig:
         session_strs = "\n".join([str(s) for s in self.sessions])
         # return f"ParsedConfig(operation={self.operation} debug={self.debug}, outputs={self.outputs}, sessions=[\n{session_strs}\n])"
         return f"""ParsedConfig(debug={self.debug}, insecure={self.insecure},
-    outputs={self.outputs}, sessions=[\n{session_strs}\n]
+    outputs={self.outputs}, protocol={self.protocol},
+    sessions=[\n{session_strs}\n]
 )
 """
 
@@ -156,6 +162,8 @@ class CLIConfigBuilder(ConfigBuilder):
                     encoding=self.args.encoding,
                     username=self.args.username,
                     password=self.args.password,
+                    insecure=self.args.insecure,
+                    protocol=self.args.protocol,
                     update_only=getattr(self.args, "update_only", False),
                     times=times,
                     sub_mode=getattr(self.args, "sub_mode", None),
@@ -170,7 +178,8 @@ class CLIConfigBuilder(ConfigBuilder):
             outputs=outputs,
             targets=targets,
             debug=self.args.debug,
-            insecure=self.args.insecure
+            insecure=self.args.insecure,
+            protocol=self.args.protocol
             # operation=global_op
         )
 
@@ -195,10 +204,11 @@ class FileConfigBuilder(ConfigBuilder):
         global_username = d.get('username', '')
         global_password = d.get('password', '')
         global_encoding = d.get('encoding', 'json_ietf')
+        global_protocol = d.get('protocol', 'gnmi').lower()
         global_times = d.get('times', 1)
         global_prefix = d.get('prefix', '')
+        global_insecure = d.get('insecure', False)
         debug = d.get('debug', False)
-        insecure = d.get('insecure', False)
         
         # Output parsing
         outputs = d.get('outputs', {
@@ -251,6 +261,8 @@ class FileConfigBuilder(ConfigBuilder):
                             subscription_name=sub_name,
                             prefix=global_prefix,
                             encoding=sub_cfg.get('encoding', global_encoding),
+                            protocol=sub_cfg.get('protocol', global_protocol),
+                            insecure=sub_cfg.get('insecure', global_insecure),
                             username=t_username,
                             password=t_password,
                             update_only=t_update_only,
@@ -325,6 +337,8 @@ class FileConfigBuilder(ConfigBuilder):
                     paths=paths,
                     operation=global_operation,
                     subscription_name=f"default_{global_operation}",
+                    protocol=sub_cfg.get('protocol', global_protocol),
+                    insecure=sub_cfg.get('insecure', global_insecure),
                     prefix=global_prefix,
                     encoding=global_encoding,
                     username=global_username,
@@ -336,7 +350,8 @@ class FileConfigBuilder(ConfigBuilder):
                 ))
 
         return ParsedConfig(sessions=sessions, targets=targets,
-                            outputs=outputs, debug=debug, insecure=insecure)
+                            outputs=outputs, debug=debug, insecure=global_insecure,
+                            protocol=global_protocol)
 
 def build_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="gNMI Subscription Client")
@@ -352,6 +367,8 @@ def build_args() -> argparse.Namespace:
                         choices=['json', 'json_ietf', 'bytes', 'proto', 'ascii'])
     parser.add_argument('-i', '--insecure', default=False,
                         help="use insecure connection if set True")
+    parser.add_argument('-p', '--protocol', default='gnmi', choices=['gnmi', 'netconf', 'restconf'],
+                        help="set Northbound Protocol client. Default is gNMI")
 
     # output specifiers
     parser.add_argument('--output-type', default='file', help="Type of output data.")

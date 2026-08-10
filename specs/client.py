@@ -1,11 +1,59 @@
 import grpc
-from typing import Iterator
+from typing import Iterator, Any, Optional
+from abc import ABC, abstractmethod
 
 # Assuming you generated these using grpc_tools.protoc
 from specs.gnmi import gnmi_pb2, gnmi_pb2_grpc
 from util.encoding import STR_TO_GNMI_ENCODING
 
-class GNMIClient:
+class BaseClient(ABC):
+    """
+    Abstract Base Class for all Northbound Protocol Clients such as NETCONF, gNMI, RESTCONF...
+    Establishes an unified interface so managers and workers can operate protocol-agnostically.
+
+    NOTE: Since it can't fully define common methods, all participants may implement
+         other RPCs using inheritance.
+    """
+
+    @staticmethod
+    def __enter__(self):
+        """Initializes connection of session context manager."""
+        pass
+
+    @abstractmethod
+    def __exit__(self):
+        """Safely tears down connection or session context manager"""
+        pass
+
+    @abstractmethod
+    def capability(self) -> Any:
+        pass
+
+    @abstractmethod
+    def get(self, paths: list, prefix: str = "", **kwargs) -> Any:
+        """
+        Executes a read/fetch operation
+        Mapped to gNMI Get, NETCONF <get>/<get-config>, or RESTCONF GET
+        """
+        pass
+
+    @abstractmethod
+    def set(self, prefix: str="", updates: list=None, deletes: list=None, replaces: list=None, **kwargs) -> Any:
+        """
+        Executes a write/edit operation
+        Mapped to gNMI Set, NETCONF <edit-config> or RESTCONF PUT/POST/DELETE
+        """
+        pass
+
+    @abstractmethod
+    def subscribe(self, request_iterator: Any) -> Iterator[Any]:
+        """
+        Executes a long-lived telemetry of event notification subscription stream.
+        Mapped to gNMI Subscribe, NETCONF event notification, or RESTCONF SSE/Webhooks
+        """
+        pass
+
+class GNMIClient(BaseClient):
     """
     A gNMI client that support gNMI Services.
 
@@ -19,6 +67,7 @@ class GNMIClient:
             username: str = "",
             password: str = "",
             insecure: bool = False,
+            encoding: str = "json_ietf",
             timeout: int = 5,
             grpc_option: list = None,
             credentials: dict = None,
@@ -28,6 +77,7 @@ class GNMIClient:
         self.target = f'{target[0]}:{target[1]}'
         self.metadata = [("username", username), ("password", password)]
         self.insecure = insecure
+        self.encoding = encoding
         
         # gNMI typically expects credentials passed as 'username' and 'password' metadata
         if username and password:
@@ -63,10 +113,10 @@ class GNMIClient:
         response = self.stub.Capabilities(request, metadata=self.metadata)
         return response
 
-    def get(self, paths: list, prefix=None, encoding="json_ietf") -> gnmi_pb2.GetResponse:
+    def get(self, paths: list, prefix=None) -> gnmi_pb2.GetResponse:
         """ Executes an Unary Get RPC """
         request = gnmi_pb2.GetRequest(
-            encoding=STR_TO_GNMI_ENCODING[encoding]
+            encoding=STR_TO_GNMI_ENCODING[self.encoding]
         )
         
         if prefix:
@@ -81,8 +131,7 @@ class GNMIClient:
         response = self.stub.Get(request, metadata=self.metadata)
         return response
 
-    def set(self, updates: list, replaces: list, deletes: list,
-            prefix=None, encoding="json_ietf") -> gnmi_pb2.SetResponse:
+    def set(self, prefix: str, updates: list, replaces: list, deletes: list) -> gnmi_pb2.SetResponse:
         """ Executes an Unary Set RPC """
         request = gnmi_pb2.SetRequest()
 
