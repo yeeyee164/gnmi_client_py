@@ -2,10 +2,8 @@ import time
 import hashlib
 import grpc
 
-from specs.client import GNMIClient
 from util.encoding import str_to_bytes
-from managers.client_factory import ClientFactory
-from modules.validate import ValidateConfig
+from managers.factory import ClientFactory, ValidatorFactory
 
 class BaseUnaryWorker:
     """
@@ -28,6 +26,9 @@ class BaseUnaryWorker:
 
         # kwargs
         self.inseucre = kwargs.get('insecure', False)
+
+        # validator
+        self.validator = ValidatorFactory.get_validator(self.protocol)
     
     def _format_result(self, rpc_name, data):
         """Standardizes the output dictionary for the handlers"""
@@ -72,6 +73,11 @@ class GetWorker(BaseUnaryWorker):
         print(f"[Worker(Get) {self.target_ip}] Requesting Get...")
 
         try:
+            #1. validate inputs
+            for path in self.paths:
+                self.validator.validate_path(path)
+
+            #2. create a client session
             with self._get_client() as client:
                 result = client.get(paths=self.paths, encoding=self.encoding, prefix=self.prefix)
                 return self._format_result("get", result)
@@ -99,6 +105,11 @@ class SetWorker(BaseUnaryWorker):
     def start(self):
         print(f"[Worker(Set) {self.target_ip}] Requesting Set...")
         try:
+            #1. validate inputs
+            for path in self.updates + self.replaces:
+                self.validator.validate_path(path, 'set')
+
+            #2. create a client session
             with self._get_client() as client:
                 result = client.set(prefix=self.prefix,
                                     update=self.updates,

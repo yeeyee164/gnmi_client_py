@@ -2,9 +2,13 @@
 """
 path.py
 
-It checks given string-typed paths to transform gNMI Path defined from gnmi.proto.
+It checks given string-typed paths to transform protocol-understandable data such as:
+* gNMI Path defined from gnmi.proto.
+* XML data for NETCONF
+* else...
 
-All of functions referenced at https://github.com/openconfig/gnmic
+
+All of functions related gNMI are referenced at https://github.com/openconfig/gnmic
 """
 
 
@@ -49,10 +53,10 @@ def parse_path(p_str: str) -> Path:
                 origin = p_str[:idx]
                 p_str = p_str[idx+1:]
 
-    elems = _to_path_elems(p_str)
+    elems = to_path_elems(p_str)
     return Path(origin=origin, elem=elems)
 
-def _to_path_elems(p_str: str) -> List[PathElem]:
+def to_path_elems(p_str: str) -> List[PathElem]:
     """Parses the xpath part of the string into a list of PathElem."""
     if not p_str:
         return []
@@ -97,11 +101,11 @@ def _to_path_elems(p_str: str) -> List[PathElem]:
     for s in string_elems:
         if not s:
             continue
-        p_elems.append(_to_path_elem(s))
+        p_elems.append(to_path_elem(s))
     
     return p_elems
 
-def _to_path_elem(s: str) -> PathElem:
+def to_path_elem(s: str) -> PathElem:
     """Parses a single element like 'interfaces[name=eth0]'."""
     idx = -1
     prev_c = ''
@@ -114,7 +118,7 @@ def _to_path_elem(s: str) -> PathElem:
 
     kvs = None
     if idx > 0:
-        kvs = _parse_xpath_keys(s[idx:])
+        kvs = parse_xpath_keys(s[idx:])
         s = s[:idx]
     elif idx == 0:
         raise EmptyPathElemNameError("empty path element name")
@@ -124,7 +128,7 @@ def _to_path_elem(s: str) -> PathElem:
 
     return PathElem(name=s, key=kvs if kvs else {})
 
-def _parse_xpath_keys(s: str) -> Dict[str, str]:
+def parse_xpath_keys(s: str) -> Dict[str, str]:
     """Parses keys [k1=v1][k2=v2] into a dictionary."""
     if not s:
         return {}

@@ -5,7 +5,7 @@ import grpc
 import queue
 import traceback
 
-from managers.client_factory import ClientFactory
+from managers.factory import ClientFactory, ValidatorFactory
 from util.encoding import str_to_bytes
 
 class GNMISession:
@@ -27,6 +27,9 @@ class GNMISession:
         self.encoding = encoding
         self.protocol = protocol.lower()
         self.subscription_name = subscription_name
+
+        # validator
+        self.validator = ValidatorFactory.get_validator(self.protocol)
 
         # secure/insecure connection settings
         self.insecure = kwargs.get('insecure', False)
@@ -84,6 +87,10 @@ class GNMISession:
                 print(f"\n[Worker {self.session_id}] Generator error: {e}")
         
         try:
+            #validate inputs before instantiating client
+            for path in self.paths:
+                self.validator.validate_path(path)
+            
             with ClientFactory.get_client(
                 protocol=self.protocol, target=self.target,
                 username=self.username, password=self.password,
