@@ -5,6 +5,7 @@ import json
 import concurrent.futures
 
 from managers.gnmi_subscribe_session import GNMISession
+from managers.gnmi_unary_worker import GetWorker, SetWorker, CapabilityWorker
 from modules.output import OutputHandler
 from ui.cmd import ParsedConfig
 
@@ -210,39 +211,41 @@ class UnaryManager(BaseRPCManager):
         self.shutdown()
 
 class ManagerFactory:
-    __unary_list = ['get', 'set', 'capability']
+    """
+    The main entry point for the execution engine.
+    Routes the ParsedConfig to the appropriate protocol-agnostic manager based ont he
+    requested RPC.
+    """
 
     @staticmethod
-    def create_nb_client_manager(operation: str, cfg: ParsedConfig):
+    def execute(cfg: ParsedConfig):
         """
-        By calling this class method, you can instantiate Northbound Protocol clients.
+        By calling this class method, you can instantiate Northbound Protocol clients in place.
         
         Currently, only gNMI is supported.
         """
-        operation = operation.lower()
-        if operation in ManagerFactory.__unary_list:
-            mode = 'unary'
-        else: mode = operation
+        for mgr in ManagerFactory.create_manager(cfg):
+            mgr.run_all()
 
-        # Lazy load the managers to prevent circular imports!
-        if mode == 'unary':
-            
-            try:
-                from . import gnmi_unary_worker as guw
-            except Exception as e:
-                raise RuntimeError("Unary workers could not be imported.") from e
 
-            if operation == 'get':
-                return UnaryManager(cfg, guw.GetWorker)
-            elif operation == 'set':
-                return UnaryManager(cfg, guw.SetWorker)
-            elif operation == 'capability':
-                return UnaryManager(cfg, guw.CapabilityWorker)
+    @staticmethod
+    def create_manager(cfg: ParsedConfig):
+        managers = []
+        # Let's create managers for each SessionConfig
+        for sc in cfg.sessions:
+            op = sc.operation
+
+            if op in ['subscribe', 'stream', 'once', 'poll']:
+                manager = SubscriptionManager(cfg=cfg)
+            elif op == 'get':
+                manager = UnaryManager(cfg, GetWorker)
+            elif op == 'set':
+                manager =  UnaryManager(cfg, SetWorker)
+            elif op == 'capability':
+                manager = UnaryManager(cfg, CapabilityWorker)
             else:
-                raise ValueError(f'failed to pick a manager for operation: {operation}')
-                
-        elif mode == 'subscribe':
-            return SubscriptionManager(cfg)
-            
-        else:
-            raise ValueError(f'Unknown manager type: {mode}')
+                raise ValueError(f'failed to pick a manager for operation: {op}')
+            managers.append(manager)
+
+        return managers
+
