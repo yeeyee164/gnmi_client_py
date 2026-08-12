@@ -17,5 +17,4 @@ if __name__ == '__main__':
     else: operation = args.operation
 
     # run configured client
-    manager = ManagerFactory.create_nb_client_manager(operation, cfg=cfg)
-    manager.run_all()
+    ManagerFactory.execute(cfg=cfg)

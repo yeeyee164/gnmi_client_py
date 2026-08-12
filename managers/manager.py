@@ -1,16 +1,18 @@
-from abc import ABC, abstractmethod
+import time
+import threading
+import queue
+import json
+import concurrent.futures
 
+from managers.gnmi_subscribe_session import GNMISession
+from managers.gnmi_unary_worker import GetWorker, SetWorker, CapabilityWorker
 from modules.output import OutputHandler
 from ui.cmd import ParsedConfig
 
 
-class BaseRPCManager(ABC):
+class BaseRPCManager:
     """
     Base class holding common utilities for all RPC Managers.
-
-    For all managers which inherits this class, they should implement methods below:
-    - run_all()
-    - build_sessions()
     """
 
     def __init__(self, cfg: ParsedConfig):
@@ -23,6 +25,8 @@ class BaseRPCManager(ABC):
 
         # Build output handlers once for all managers
         for out_name, out_cfg in self.outputs.items():
+            out_cfg['protocol'] = self.session_configs[0].protocol if self.session_configs else 'gnmi'
+            out_cfg['debug'] = self.debug
             self.output_handlers.append(OutputHandler(out_name, out_cfg))
     
     def shutdown(self):
@@ -31,56 +35,217 @@ class BaseRPCManager(ABC):
             handler.close()
         print("[Manager] Outputs cleanly closed. Goodbye!")
 
-    @abstractmethod
+class SubscriptionManager(BaseRPCManager):
+    """
+    Orchestrates multiple SubscribeSession workers using Python threading package.
+    """
+
+    def __init__(self, cfg: ParsedConfig):
+        super().__init__(cfg)
+        self.threads = []            # Holds the active Thread objects
+
+        #common channel for worker results
+        # this queue supports Locking mechanism
+        self.data_queue = queue.Queue()
+
     def build_sessions(self):
-        """
-            build_sessions builds up incoming sessions in injected `ParsedConfig` object. 
-        """
-        pass
-    
-    @abstractmethod
+        """Parses the targets and instantiates the Worker objects."""
+        for sc in self.session_configs:
+            for _ in range(sc.times):
+                try:
+                    #TODO: support list-based config
+                    ip, port = sc.target.split(':')
+
+                    # Package STREAM-specific args and update-only flag
+                    args = {
+                        'sub_mode' : sc.sub_mode,
+                        'sample_interval' : sc.sample_interval,
+                        'update_only' : sc.update_only,
+                        'insecure': sc.insecure
+                    }
+
+                    session = GNMISession(
+                        target_ip=ip,
+                        target_port=int(port),
+                        paths=sc.paths,
+                        data_queue=self.data_queue,
+                        mode = sc.mode,
+                        encoding=sc.encoding,
+                        username=sc.username,
+                        password=sc.password,
+                        prefix=sc.prefix,
+                        subscription_name=sc.subscription_name,
+                        debug=self.debug,
+                        **args)
+
+                    self.sessions.append(session)
+                except ValueError:
+                    print(f"[Manager] Invalid target format '{sc.target}'. Expected IP:PORT.")
+
     def run_all(self):
-        """
-            run_all sets up RPC sessions which previously created by `build_sessions`.
-        """
-        pass
+        """Spins up a background thread for each session and waits."""
+        self.build_sessions()
+        
+        if not self.sessions:
+            print("[Manager] No valid sessions to start. Exiting.")
+            return
+
+        print(f"[Manager] Starting {len(self.sessions)} concurrent sessions...")
+        
+        # Start a thread for every session
+        for session in self.sessions:
+            t = threading.Thread(target=session.start, daemon=True)
+            self.threads.append(t)
+            t.start()
+
+        if any(s.mode.lower() == 'poll' for s in self.sessions):
+            controller_t = threading.Thread(target=self._interactive_poll_controller, daemon=True)
+            controller_t.start()
+
+        # The Main Thread blocks here, keeping the script alive and watching for Ctrl+C
+        try:
+            while any(t.is_alive() for t in self.threads):
+                try:
+                    message = self.data_queue.get(timeout=1.0)
+
+                    # Process and print the message safely in the main thread
+                    # print(f"\n--- [Telemetry from Session: {message['session_id']} | Target: {message['target']}] ---")
+                    # print(json.dumps(message['data'], indent=2))
+
+                    for handler in self.output_handlers:
+                        handler.write(message)
+                    
+                    self.data_queue.task_done()
+                except queue.Empty:
+                    continue
+        except KeyboardInterrupt:
+            print("\n[Manager] Ctrl+C Detected! Initiating graceful shutdown...")
+        
+        for session in self.sessions:
+            session.stop()
+        # Give threads a moment to safely close their gRPC channels
+        for t in self.threads:
+            t.join(timeout=2) 
+
+        self.shutdown()
+            
+        print("[Manager] All sessions cleanly terminated. Goodbye!")
+
+    def _interactive_poll_controller(self):
+        """A simple background CLI to allow users to trigger polls manually."""
+        poll_sessions = [s for s in self.sessions if s.mode.lower() == 'poll']
+        time.sleep(2) # Give streams a moment to connect
+        
+        while True:
+            print("\n" + "="*40)
+            print(" Interactive POLL Controller")
+            print("="*40)
+            for idx, s in enumerate(poll_sessions):
+                print(f"  [{idx}] {s.session_id} - {s.target_ip} ({s.subscription_name})")
+            
+            try:
+                choice = input("\nType a session index to trigger, 'all', or press Enter to refresh: ").strip().lower()
+                if choice == 'all':
+                    for s in poll_sessions:
+                        s.trigger_poll()
+                        print(f"-> Sent POLL to {s.session_id}")
+                elif choice.isdigit():
+                    idx = int(choice)
+                    if 0 <= idx < len(poll_sessions):
+                        poll_sessions[idx].trigger_poll()
+                        print(f"-> Sent POLL to {poll_sessions[idx].session_id}")
+                    else:
+                        print("Invalid index.")
+            except EOFError:
+                break
+            except KeyboardInterrupt:
+                break       
+
+class UnaryManager(BaseRPCManager):
+    """
+    Orchestrates RPCs except specific session-required using a ThreadPoolExecutor
+    These tasks execute only once. It returns their data and exit.
+    """
+
+    def __init__(self, cfg: ParsedConfig, worker_class):
+        super().__init__(cfg)
+        # Injects GetWorker, SetWorker, etc...
+        self.worker_class = worker_class
+
+    def build_sessions(self):
+        for sc in self.session_configs:
+            try:
+                ip, port = sc.target.split(':')
+                session = self.worker_class(
+                    target_ip=ip, target_port=int(port), paths=sc.paths, 
+                    encoding=sc.encoding, username=sc.username, password=sc.password,
+                    insecure=sc.insecure,
+                    prefix=sc.prefix
+                )
+                self.sessions.append(session)
+            except ValueError:
+                print(f"[Manager] Invalid target format '{sc.target}'. Expected IP:PORT")
+
+    def run_all(self):
+        self.build_sessions()
+        if not self.sessions:
+            print("[Manager] No valid sessions to start. Exiting.")
+            return
+        
+        print(f"[Manager] Starting {len(self.sessions)} concurrent unary tasks...")
+
+        # By using ThreadPoolExecutor, we can handle unary RPCs concurrently
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max(len(self.sessions), 1)) as executor:
+            future_to_session = {executor.submit(session.start): session for session in self.sessions}
+
+            for future in concurrent.futures.as_completed(future_to_session):
+                session = future_to_session[future]
+                try:
+                    # Retrieve the returned dictionary from the worker's start() method
+                    result = future.result()
+                    if result:
+                        for handler in self.output_handlers:
+                            handler.write(result)
+                except Exception as exc:
+                    print(f"[Worker({str(self.worker_class)}) {session.target_ip}] generated an exception: {exc}")
+        self.shutdown()
 
 class ManagerFactory:
-    __unary_list = ['get', 'set', 'capabilities']
+    """
+    The main entry point for the execution engine.
+    Routes the ParsedConfig to the appropriate protocol-agnostic manager based ont he
+    requested RPC.
+    """
 
     @staticmethod
-    def create_nb_client_manager(operation: str, cfg: ParsedConfig):
+    def execute(cfg: ParsedConfig):
         """
-        By calling this class method, you can instantiate Northbound Protocol clients.
+        By calling this class method, you can instantiate Northbound Protocol clients in place.
         
         Currently, only gNMI is supported.
         """
-        operation = operation.lower()
-        if operation in ManagerFactory.__unary_list:
-            mode = 'unary'
-        else: mode = operation
+        for mgr in ManagerFactory.create_manager(cfg):
+            mgr.run_all()
 
-        # Lazy load the managers to prevent circular imports!
-        if mode == 'unary':
-            from .gnmi_manager import UnaryManager
-            
-            try:
-                from . import gnmi_unary_worker as guw
-            except Exception as e:
-                raise RuntimeError("Unary workers could not be imported.") from e
 
-            if operation == 'get':
-                return UnaryManager(cfg, guw.GetWorker)
-            elif operation == 'set':
-                return UnaryManager(cfg, guw.SetWorker)
-            elif operation == 'capabilities':
-                return UnaryManager(cfg, guw.CapabilitiesWorker)
+    @staticmethod
+    def create_manager(cfg: ParsedConfig):
+        managers = []
+        # Let's create managers for each SessionConfig
+        for sc in cfg.sessions:
+            op = sc.operation
+
+            if op in ['subscribe', 'stream', 'once', 'poll']:
+                manager = SubscriptionManager(cfg=cfg)
+            elif op == 'get':
+                manager = UnaryManager(cfg, GetWorker)
+            elif op == 'set':
+                manager =  UnaryManager(cfg, SetWorker)
+            elif op == 'capability':
+                manager = UnaryManager(cfg, CapabilityWorker)
             else:
-                raise ValueError(f'failed to pick a manager for operation: {operation}')
-                
-        elif mode == 'subscribe':
-            from .gnmi_manager import SubscriptionManager
-            return SubscriptionManager(cfg)
-            
-        else:
-            raise ValueError(f'Unknown manager type: {mode}')
+                raise ValueError(f'failed to pick a manager for operation: {op}')
+            managers.append(manager)
+
+        return managers
+

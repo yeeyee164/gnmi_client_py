@@ -3,8 +3,8 @@ import pytest
 from specs.gnmi.gnmi_pb2 import Path, PathElem
 from modules.path import (
     parse_path,
-    _parse_xpath_keys,
-    _to_path_elem,
+    parse_xpath_keys,
+    to_path_elem,
     MalformedXPathError,
     MalformedXPathKeyError,
     EmptyPathElemNameError
@@ -124,7 +124,7 @@ def test_parse_path(name: str, str_path:str, gnmi_path: Path, ok: bool, error):
 ])
 def test_parse_xpath_keys(name: str, kv: str, exp: dict):
     try:
-        keyval = _parse_xpath_keys(kv)
+        keyval = parse_xpath_keys(kv)
 
         assert keyval.__eq__(exp['out']) == True
     except MalformedXPathKeyError as e:
@@ -140,7 +140,7 @@ def test_parse_xpath_keys(name: str, kv: str, exp: dict):
 ])
 def test_path_elem(name: str, kv: str, exp: dict):
     try:
-        path_elem = _to_path_elem(kv)
+        path_elem = to_path_elem(kv)
 
         assert path_elem.__eq__(exp['out'])
     except MalformedXPathError as e:
