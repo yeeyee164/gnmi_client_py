@@ -71,6 +71,11 @@ class ParsedConfig:
     insecure: bool = False        # Insecure connection
     debug: bool = False           # Global debug flag
 
+    # for logging this script
+    log_level: str = "INFO"
+    syslog_server: str = ""
+    log_file: str = ""
+
     def __str__(self):
         session_strs = "\n".join([str(s) for s in self.sessions])
         # return f"ParsedConfig(operation={self.operation} debug={self.debug}, outputs={self.outputs}, sessions=[\n{session_strs}\n])"
@@ -179,7 +184,10 @@ class CLIConfigBuilder(ConfigBuilder):
             targets=targets,
             debug=self.args.debug,
             insecure=self.args.insecure,
-            protocol=self.args.protocol
+            protocol=self.args.protocol,
+            log_level=self.args.log_level,
+            syslog_server=self.args.syslog_server,
+            log_file=self.args.log_file,
             # operation=global_op
         )
 
@@ -349,9 +357,14 @@ class FileConfigBuilder(ConfigBuilder):
                     deletes=deletes
                 ))
 
-        return ParsedConfig(sessions=sessions, targets=targets,
-                            outputs=outputs, debug=debug, insecure=global_insecure,
-                            protocol=global_protocol)
+        return ParsedConfig(
+            sessions=sessions, targets=targets,
+            outputs=outputs, debug=debug, insecure=global_insecure,
+            protocol=global_protocol,
+            log_level=d.get('log_level', 'INFO'),
+            syslog_server=d.get('syslog_server', ''),
+            log_file=d.get('log_file', ''),
+        )
 
 def build_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="gNMI Subscription Client")
@@ -367,6 +380,13 @@ def build_args() -> argparse.Namespace:
                         choices=['json', 'json_ietf', 'bytes', 'proto', 'ascii'])
     parser.add_argument('-i', '--insecure', default=False,
                         help="use insecure connection if set True")
+
+    # logger
+    parser.add_argument('--log-level', default='INFO',
+                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
+                        help="Set logging level")
+    parser.add_argument('--syslog-server', default='', help="IP:PORT of Syslog server")
+    parser.add_argument('--log-file', default='', help="Path to save local logs")
 
     # TODO: it SHOULD be subparser; because each protocol may have 
     # different arguments/methods
