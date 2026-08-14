@@ -47,6 +47,7 @@ class SubscriptionManager(BaseRPCManager):
         #common channel for worker results
         # this queue supports Locking mechanism
         self.data_queue = queue.Queue()
+        self.security = cfg.security
 
     def build_sessions(self):
         """Parses the targets and instantiates the Worker objects."""
@@ -76,6 +77,7 @@ class SubscriptionManager(BaseRPCManager):
                         prefix=sc.prefix,
                         subscription_name=sc.subscription_name,
                         debug=self.debug,
+                        security=self.security,
                         **args)
 
                     self.sessions.append(session)
@@ -98,6 +100,7 @@ class SubscriptionManager(BaseRPCManager):
             self.threads.append(t)
             t.start()
 
+        # run another thread to invoke Poll mechanism
         if any(s.mode.lower() == 'poll' for s in self.sessions):
             controller_t = threading.Thread(target=self._interactive_poll_controller, daemon=True)
             controller_t.start()
@@ -172,6 +175,9 @@ class UnaryManager(BaseRPCManager):
         # Injects GetWorker, SetWorker, etc...
         self.worker_class = worker_class
 
+        # get global configurations
+        self.security = cfg.security
+
     def build_sessions(self):
         for sc in self.session_configs:
             try:
@@ -180,7 +186,8 @@ class UnaryManager(BaseRPCManager):
                     target_ip=ip, target_port=int(port), paths=sc.paths, 
                     encoding=sc.encoding, username=sc.username, password=sc.password,
                     insecure=sc.insecure,
-                    prefix=sc.prefix
+                    prefix=sc.prefix,
+                    security=self.security
                 )
                 self.sessions.append(session)
             except ValueError:
@@ -230,6 +237,10 @@ class ManagerFactory:
 
     @staticmethod
     def create_manager(cfg: ParsedConfig):
+        """
+        If you want to create each manager via given config(`ParsedConfig`), you can
+        do that by calling this static method.
+        """
         managers = []
         # Let's create managers for each SessionConfig
         for sc in cfg.sessions:

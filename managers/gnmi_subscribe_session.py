@@ -33,6 +33,7 @@ class GNMISession:
 
         # secure/insecure connection settings
         self.insecure = kwargs.get('insecure', False)
+        self.security = kwargs.get('security', None)
 
         # some global options such as debug flag
         self.debug = kwargs.get('debug', False)
@@ -94,7 +95,7 @@ class GNMISession:
             with ClientFactory.get_client(
                 protocol=self.protocol, target=self.target,
                 username=self.username, password=self.password,
-                insecure=self.insecure, debug=self.debug) as client:
+                insecure=self.insecure, debug=self.debug, security=self.security) as client:
                 response_stream = client.subscribe(request_generator())
                 
                 for raw_response in response_stream:
