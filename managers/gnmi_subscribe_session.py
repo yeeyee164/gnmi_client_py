@@ -4,9 +4,12 @@ import hashlib
 import grpc
 import queue
 import traceback
+import logging
 
 from managers.factory import ClientFactory, ValidatorFactory
 from util.encoding import str_to_bytes
+
+logger = logging.getLogger(__name__)
 
 class GNMISession:
     """
@@ -56,7 +59,7 @@ class GNMISession:
             
     def start(self):
         self.is_running = True
-        print(f"[Worker {self.session_id} | {self.target_ip}]"
+        logger.debug(f"[Worker {self.session_id} | {self.target_ip}]"
               f" Starting '{self.subscription_name}' ({self.mode.upper()}) session...")
 
         def request_generator():
@@ -84,7 +87,7 @@ class GNMISession:
                     except queue.Empty:
                         continue
             except Exception as e:
-                print(f"\n[Worker {self.session_id}] Generator error: {e}")
+                logger.error(f"\n[Worker {self.session_id}] Generator error: {e}")
         
         try:
             #validate inputs before instantiating client
@@ -112,12 +115,12 @@ class GNMISession:
                     })
                     
         except grpc.RpcError as e:
-            print(f"[Worker {self.session_id} | {self.target_ip}] gRPC Error '{e.code()}': {e.details()}")
+            logger.error(f"[Worker {self.session_id} | {self.target_ip}] gRPC Error '{e.code()}': {e.details()}")
         except Exception as e:
             traceback.print_stack()
-            print(f"[Worker {self.session_id} | {self.target_ip}] Error in '{self.subscription_name}': {e}")
+            logger.error(f"[Worker {self.session_id} | {self.target_ip}] Error in '{self.subscription_name}': {e}")
         finally:
-            print(f"[Worker {self.session_id} | {self.target_ip}] Disconnected from '{self.subscription_name}'.")
+            logger.info(f"[Worker {self.session_id} | {self.target_ip}] Disconnected from '{self.subscription_name}'.")
     
     def stop(self):
         self.is_running = False
@@ -127,4 +130,4 @@ class GNMISession:
         if self.mode.lower() == 'poll':
             self.poll_queue.put("POLL")
         else:
-            print(f"[Worker {self.session_id} | {self.target_ip}] Ignored POLL trigger. Session is in '{self.mode}' mode.")
+            logger.warning(f"[Worker {self.session_id} | {self.target_ip}] Ignored POLL trigger. Session is in '{self.mode}' mode.")
