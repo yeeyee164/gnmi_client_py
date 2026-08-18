@@ -5,12 +5,17 @@
     `cmd.py` defines a user interface for the system command lines.
     It has a DataClass named `ParsedConfig` which 'normalizes' information
     given by interfaces. 
+
+    `ParsedConfig` should contain at least one `SessionConfig` which denotes client session.
+    `SessionConfig` will be created per each target.
 """
 import argparse
 import json
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict
 from abc import ABC, abstractmethod
+
+from modules.security import SecurityProfile
 
 @dataclass
 class SessionConfig:
@@ -65,12 +70,13 @@ class ParsedConfig:
     """
     sessions: List[SessionConfig] # List of all individual sessions to spawn
     outputs: Dict                 # Output definitions
-    # operation: str = "subscribe"  # Top-level operation type for Manager selection
     targets: List[str] = field(default_factory=list) # List of "IP:PORT" strings
     protocol: str = "gnmi"        # Northbound Protocol - default is gNMI
     insecure: bool = False        # Insecure connection
     debug: bool = False           # Global debug flag
 
+    # security options
+    security: SecurityProfile = field(default_factory=SecurityProfile)
     # for logging this script
     log_level: str = "INFO"
     syslog_server: str = ""
@@ -78,7 +84,6 @@ class ParsedConfig:
 
     def __str__(self):
         session_strs = "\n".join([str(s) for s in self.sessions])
-        # return f"ParsedConfig(operation={self.operation} debug={self.debug}, outputs={self.outputs}, sessions=[\n{session_strs}\n])"
         return f"""ParsedConfig(debug={self.debug}, insecure={self.insecure},
     outputs={self.outputs}, protocol={self.protocol},
     sessions=[\n{session_strs}\n]
@@ -185,6 +190,12 @@ class CLIConfigBuilder(ConfigBuilder):
             debug=self.args.debug,
             insecure=self.args.insecure,
             protocol=self.args.protocol,
+            security=SecurityProfile(
+                tls_ca=getattr(self.args, "tls_ca", ""),
+                tls_cert=getattr(self.args, "tls_cert", ""),
+                tls_key=getattr(self.args, "tls_key", ""),
+                skip_verify=getattr(self.args, "skip_verify", ""),
+            ),
             log_level=self.args.log_level,
             syslog_server=self.args.syslog_server,
             log_file=self.args.log_file,
@@ -216,6 +227,12 @@ class FileConfigBuilder(ConfigBuilder):
         global_times = d.get('times', 1)
         global_prefix = d.get('prefix', '')
         global_insecure = d.get('insecure', False)
+        global_security = SecurityProfile(
+            tls_ca=d.get('tls_ca', ''),
+            tls_cert=d.get('tls_cert', ''),
+            tls_key=d.get('tls_key', ''),
+            skip_verify=d.get('skip_verify', False),
+        )
         debug = d.get('debug', False)
         
         # Output parsing
@@ -361,6 +378,7 @@ class FileConfigBuilder(ConfigBuilder):
             sessions=sessions, targets=targets,
             outputs=outputs, debug=debug, insecure=global_insecure,
             protocol=global_protocol,
+            security=global_security,
             log_level=d.get('log_level', 'INFO'),
             syslog_server=d.get('syslog_server', ''),
             log_file=d.get('log_file', ''),
@@ -378,9 +396,22 @@ def build_args() -> argparse.Namespace:
     parser.add_argument('-e', '--encoding', default='json_ietf',
                         help="encoding formats defined at gNMI", 
                         choices=['json', 'json_ietf', 'bytes', 'proto', 'ascii'])
-    parser.add_argument('-i', '--insecure', default=False,
+    parser.add_argument('-i', '--insecure', action='store_true',
                         help="use insecure connection if set True")
 
+    # output specifiers
+    parser.add_argument('--output-type', default='file', help="Type of output data.")
+    parser.add_argument('--output-file-type', default='stdout', help="direction of output data.")
+    parser.add_argument('--output-format', default='json', help="Specify output format.")
+
+    # security options
+    parser.add_argument('--tls-ca', default='', help="Path to CA certificate")
+    parser.add_argument('--tls-cert', default='', help="Path to client certificate")
+    parser.add_argument('--tls-key', default='', help="Path to client private key")
+    parser.add_argument('--skip-verify', action='store_true', help="Path to CA certificate")
+    parser.add_argument('--tls-server-name', default='', help="sets the server name to be used when verifying the hostname on the returned certificates. If 'skip-verify' was set, this options is meaningless.")
+    parser.add_argument('--tls-version', default='1.3', choices=['1.0','1.1','1.2','1.3'],
+                         help="set TLS version. Default version is 1.3")
     # logger
     parser.add_argument('--log-level', default='INFO',
                         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
@@ -393,11 +424,12 @@ def build_args() -> argparse.Namespace:
     parser.add_argument('-p', '--protocol', default='gnmi', choices=['gnmi', 'netconf', 'restconf'],
                         help="set Northbound Protocol client. Default is gNMI")
 
-    # output specifiers
-    parser.add_argument('--output-type', default='file', help="Type of output data.")
-    parser.add_argument('--output-file-type', default='stdout', help="direction of output data.")
-    parser.add_argument('--output-format', default='json', help="Specify output format.")
+    # add gNMI parser
+    gnmi_args(parser)
 
+    return parser.parse_args()
+
+def gnmi_args(parser: argparse.ArgumentParser):
     # Top-Level Operation Parser
     subparsers = parser.add_subparsers(dest='operation', help="specify gNMI RPC operation")
 
@@ -427,8 +459,6 @@ def build_args() -> argparse.Namespace:
                             default='sample', help='choose Subscribe stream mode(default is sample)')
     parser_sub.add_argument('--update-only', help="skip initial responses from server", action='store_true')
     parser_sub.add_argument('--sample-interval', type=int, default=90, help='sample interval in seconds')
-
-    return parser.parse_args()
 
 def config_builder(args) -> ParsedConfig:
     """Build an appropriate `ParsedConfig` class by the contents of argument"""

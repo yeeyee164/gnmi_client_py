@@ -5,7 +5,7 @@ from abc import ABC, abstractmethod
 # Assuming you generated these using grpc_tools.protoc
 from specs.gnmi import gnmi_pb2, gnmi_pb2_grpc
 from modules.path import parse_path
-from util.encoding import STR_TO_GNMI_ENCODING
+from modules.security import TLSProfile
 
 #define some global variables
 NANOSECOND = 1000000000
@@ -83,6 +83,7 @@ class GNMIClient(BaseClient):
 
         # Configure from keyward arguments
         self.insecure = kwargs.get('insecure', False)
+        self.security = kwargs.get('security', None)
         self.encoding = kwargs.get('encoding', "json_ietf")
         self.debug = kwargs.get('debug', False)
 
@@ -103,8 +104,17 @@ class GNMIClient(BaseClient):
 
         if self.insecure:
             self.channel = grpc.insecure_channel(self.target)
+        elif self.security is not None:
+            # create a TLS-based secure communication
+            tls_profile = TLSProfile(profile=self.security)
+            creds = tls_profile.get_grpc_credentials()
+            options = tls_profile.get_grpc_options()
+
+            # set additional options
+            self.channel = grpc.secure_channel(self.target, creds, options=options)
         else:
-            raise NotImplementedError("secure channel is TBD")
+            raise NotImplementedError("present security information or run insecure mode")
+
         self.stub = gnmi_pb2_grpc.gNMIStub(self.channel)
         return self
 

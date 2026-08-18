@@ -29,6 +29,7 @@ class BaseUnaryWorker:
 
         # kwargs
         self.inseucre = kwargs.get('insecure', False)
+        self.security = kwargs.get('security', None)
 
         # validator
         self.validator = ValidatorFactory.get_validator(self.protocol)
@@ -48,7 +49,7 @@ class BaseUnaryWorker:
         return ClientFactory.get_client(
             protocol=self.protocol, target=self.target, 
             username=self.username, password=self.password,
-            insecure=self.inseucre
+            insecure=self.inseucre, security=self.security
         )
 
 class CapabilityWorker(BaseUnaryWorker):
