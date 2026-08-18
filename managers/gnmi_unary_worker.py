@@ -1,9 +1,12 @@
 import time
 import hashlib
 import grpc
+import logging
 
 from util.encoding import str_to_bytes
 from managers.factory import ClientFactory, ValidatorFactory
+
+logger = logging.getLogger(__name__)
 
 class BaseUnaryWorker:
     """
@@ -51,7 +54,7 @@ class BaseUnaryWorker:
 
 class CapabilityWorker(BaseUnaryWorker):
     def start(self):
-        print(f"[Worker(Capability) {self.target_ip}] Requesting Capability...")
+        logger.debug(f"[Worker(Capability) {self.target_ip}] Requesting Capability...")
 
         try:
             with self._get_client() as client:
@@ -59,7 +62,7 @@ class CapabilityWorker(BaseUnaryWorker):
                 return self._format_result("capability", result)
                 
         except grpc.RpcError as e:
-            print(f'[Worker(Capability) {self.target_ip}] gRPC error: {e.code()} - {e.details()}')
+            logger.error(f'[Worker(Capability) {self.target_ip}] gRPC error: {e.code()} - {e.details()}')
             return None
 
     def __str__(self):
@@ -71,7 +74,7 @@ class GetWorker(BaseUnaryWorker):
         self.paths = paths
 
     def start(self):
-        print(f"[Worker(Get) {self.target_ip}] Requesting Get...")
+        logger.debug(f"[Worker(Get) {self.target_ip}] Requesting Get...")
 
         try:
             #1. validate inputs
@@ -84,7 +87,7 @@ class GetWorker(BaseUnaryWorker):
                 return self._format_result("get", result)
                 
         except grpc.RpcError as e:
-            print(f'[Worker(Get) {self.target_ip}] gRPC error: {e.code()} - {e.details()}')
+            logger.error(f'[Worker(Get) {self.target_ip}] gRPC error: {e.code()} - {e.details()}')
             return None
 
     def __str__(self):
@@ -104,7 +107,7 @@ class SetWorker(BaseUnaryWorker):
         self.deletes = deletes or []
 
     def start(self):
-        print(f"[Worker(Set) {self.target_ip}] Requesting Set...")
+        logger.debug(f"[Worker(Set) {self.target_ip}] Requesting Set...")
         try:
             #1. validate inputs
             for path in self.updates + self.replaces:
@@ -118,7 +121,7 @@ class SetWorker(BaseUnaryWorker):
                                     delete=self.deletes)
                 return self._format_result("Set", result)
         except grpc.RpcError as e:
-            print(f"[Worker(Set) {self.target_ip}] gRPC Error: {e.code()} - {e.details()}")
+            logger.error(f"[Worker(Set) {self.target_ip}] gRPC Error: {e.code()} - {e.details()}")
             return None
 
     def __str__(self):

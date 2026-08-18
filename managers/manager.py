@@ -9,6 +9,9 @@ from managers.gnmi_unary_worker import GetWorker, SetWorker, CapabilityWorker
 from modules.output import OutputHandler
 from ui.cmd import ParsedConfig
 
+import logging
+
+logger = logging.getLogger(__name__)
 
 class BaseRPCManager:
     """
@@ -33,7 +36,7 @@ class BaseRPCManager:
         """Safely closes all output file handles"""
         for handler in self.output_handlers:
             handler.close()
-        print("[Manager] Outputs cleanly closed. Goodbye!")
+        logger.info("[Manager] Outputs cleanly closed. Goodbye!")
 
 class SubscriptionManager(BaseRPCManager):
     """
@@ -82,17 +85,17 @@ class SubscriptionManager(BaseRPCManager):
 
                     self.sessions.append(session)
                 except ValueError:
-                    print(f"[Manager] Invalid target format '{sc.target}'. Expected IP:PORT.")
+                    logger.error(f"[Manager] Invalid target format '{sc.target}'. Expected IP:PORT.")
 
     def run_all(self):
         """Spins up a background thread for each session and waits."""
         self.build_sessions()
         
         if not self.sessions:
-            print("[Manager] No valid sessions to start. Exiting.")
+            logger.error("[Manager] No valid sessions to start. Exiting.")
             return
 
-        print(f"[Manager] Starting {len(self.sessions)} concurrent sessions...")
+        logger.info(f"[Manager] Starting {len(self.sessions)} concurrent sessions...")
         
         # Start a thread for every session
         for session in self.sessions:
@@ -112,8 +115,7 @@ class SubscriptionManager(BaseRPCManager):
                     message = self.data_queue.get(timeout=1.0)
 
                     # Process and print the message safely in the main thread
-                    # print(f"\n--- [Telemetry from Session: {message['session_id']} | Target: {message['target']}] ---")
-                    # print(json.dumps(message['data'], indent=2))
+                    logger.debug(f"\n--- [Telemetry from Session: {message['session_id']} | Target: {message['target']}] ---")
 
                     for handler in self.output_handlers:
                         handler.write(message)
@@ -122,7 +124,7 @@ class SubscriptionManager(BaseRPCManager):
                 except queue.Empty:
                     continue
         except KeyboardInterrupt:
-            print("\n[Manager] Ctrl+C Detected! Initiating graceful shutdown...")
+            logger.info("\n[Manager] Ctrl+C Detected! Initiating graceful shutdown...")
         
         for session in self.sessions:
             session.stop()
@@ -132,13 +134,15 @@ class SubscriptionManager(BaseRPCManager):
 
         self.shutdown()
             
-        print("[Manager] All sessions cleanly terminated. Goodbye!")
+        logger.info("[Manager] All sessions cleanly terminated. Goodbye!")
 
     def _interactive_poll_controller(self):
         """A simple background CLI to allow users to trigger polls manually."""
         poll_sessions = [s for s in self.sessions if s.mode.lower() == 'poll']
         time.sleep(2) # Give streams a moment to connect
         
+        # This is an interactive terminal session for POLL.
+        # So no need to change to logger
         while True:
             print("\n" + "="*40)
             print(" Interactive POLL Controller")
@@ -191,15 +195,15 @@ class UnaryManager(BaseRPCManager):
                 )
                 self.sessions.append(session)
             except ValueError:
-                print(f"[Manager] Invalid target format '{sc.target}'. Expected IP:PORT")
+                logger.error(f"[Manager] Invalid target format '{sc.target}'. Expected IP:PORT")
 
     def run_all(self):
         self.build_sessions()
         if not self.sessions:
-            print("[Manager] No valid sessions to start. Exiting.")
+            logger.warning("[Manager] No valid sessions to start. Exiting.")
             return
         
-        print(f"[Manager] Starting {len(self.sessions)} concurrent unary tasks...")
+        logger.info(f"[Manager] Starting {len(self.sessions)} concurrent unary tasks...")
 
         # By using ThreadPoolExecutor, we can handle unary RPCs concurrently
         with concurrent.futures.ThreadPoolExecutor(max_workers=max(len(self.sessions), 1)) as executor:
@@ -214,7 +218,7 @@ class UnaryManager(BaseRPCManager):
                         for handler in self.output_handlers:
                             handler.write(result)
                 except Exception as exc:
-                    print(f"[Worker({str(self.worker_class)}) {session.target_ip}] generated an exception: {exc}")
+                    logger.error(f"[Worker({str(self.worker_class)}) {session.target_ip}] generated an exception: {exc}")
         self.shutdown()
 
 class ManagerFactory:

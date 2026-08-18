@@ -77,6 +77,10 @@ class ParsedConfig:
 
     # security options
     security: SecurityProfile = field(default_factory=SecurityProfile)
+    # for logging this script
+    log_level: str = "INFO"
+    syslog_server: str = ""
+    log_file: str = ""
 
     def __str__(self):
         session_strs = "\n".join([str(s) for s in self.sessions])
@@ -192,6 +196,10 @@ class CLIConfigBuilder(ConfigBuilder):
                 tls_key=getattr(self.args, "tls_key", ""),
                 skip_verify=getattr(self.args, "skip_verify", ""),
             ),
+            log_level=self.args.log_level,
+            syslog_server=self.args.syslog_server,
+            log_file=self.args.log_file,
+            # operation=global_op
         )
 
 class FileConfigBuilder(ConfigBuilder):
@@ -366,9 +374,15 @@ class FileConfigBuilder(ConfigBuilder):
                     deletes=deletes
                 ))
 
-        return ParsedConfig(sessions=sessions, targets=targets,
-                            outputs=outputs, debug=debug, insecure=global_insecure,
-                            protocol=global_protocol, security=global_security)
+        return ParsedConfig(
+            sessions=sessions, targets=targets,
+            outputs=outputs, debug=debug, insecure=global_insecure,
+            protocol=global_protocol,
+            security=global_security,
+            log_level=d.get('log_level', 'INFO'),
+            syslog_server=d.get('syslog_server', ''),
+            log_file=d.get('log_file', ''),
+        )
 
 def build_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="gNMI Subscription Client")
@@ -398,6 +412,12 @@ def build_args() -> argparse.Namespace:
     parser.add_argument('--tls-server-name', default='', help="sets the server name to be used when verifying the hostname on the returned certificates. If 'skip-verify' was set, this options is meaningless.")
     parser.add_argument('--tls-version', default='1.3', choices=['1.0','1.1','1.2','1.3'],
                          help="set TLS version. Default version is 1.3")
+    # logger
+    parser.add_argument('--log-level', default='INFO',
+                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
+                        help="Set logging level")
+    parser.add_argument('--syslog-server', default='', help="IP:PORT of Syslog server")
+    parser.add_argument('--log-file', default='', help="Path to save local logs")
 
     # TODO: it SHOULD be subparser; because each protocol may have 
     # different arguments/methods
