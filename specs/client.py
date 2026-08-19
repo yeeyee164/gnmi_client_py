@@ -5,7 +5,7 @@ from abc import ABC, abstractmethod
 # Assuming you generated these using grpc_tools.protoc
 from specs.gnmi import gnmi_pb2, gnmi_pb2_grpc
 from modules.path import parse_path
-from modules.security import TLSProfile
+from modules.security import SecurityModule
 
 #define some global variables
 NANOSECOND = 1000000000
@@ -106,9 +106,9 @@ class GNMIClient(BaseClient):
             self.channel = grpc.insecure_channel(self.target)
         elif self.security is not None:
             # create a TLS-based secure communication
-            tls_profile = TLSProfile(profile=self.security)
-            creds = tls_profile.get_grpc_credentials()
-            options = tls_profile.get_grpc_options()
+            # tls_profile = TLSProfile(profile=self.security)
+            creds = self.security.get_grpc_credentials()
+            options = self.security.get_grpc_options()
 
             # set additional options
             self.channel = grpc.secure_channel(self.target, creds, options=options)
@@ -237,3 +237,84 @@ class GNMIClient(BaseClient):
 
         # The stub returns an iterator that continuously yields SubscribeResponses as they arrive
         return self.stub.Subscribe(pb_generator(), metadata=self.metadata)
+
+from ncclient import manager
+class NetconfClient(BaseClient):
+    """
+    A "Lite" NETCONF Client utilizing ncclient.
+    Currently accepts raw XPath strings for its paths.
+    Future versions will utilize libyang to translate standard paths to XML Subtrees.
+    """
+    def __init__(self, target: str, username: str = "", password: str = "", **kwargs):
+        self.target = target
+        self.username = username
+        self.password = password
+        self.session = None
+
+        # unwind kwargs
+        self.security = kwargs.get('security', None)
+
+    def __enter__(self):
+        host, port = self.target.split(':')
+        
+        # Default SSH connection kwargs
+        netconf_info = {
+            'host': host,
+            'port': int(port),
+            'username': self.username,
+            'password': self.password,
+            'hostkey_verify': False  # Allow unknown SSH host keys for testing
+        }
+
+        # Inject SSH Keys from the Security Module if provided
+        if self.security:
+            ssh_kwargs = self.security.get_ssh_kwargs()
+            if ssh_kwargs:
+                netconf_info.update(ssh_kwargs)
+
+        self.session = manager.connect(**netconf_info)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.session:
+            self.session.close_session()
+
+    def capabilities(self) -> Any:
+        return list(self.session.server_capabilities)
+
+    def get(self, paths: list, prefix: str = "", **kwargs) -> Any:
+        """
+        Executes a NETCONF <get>.
+        In this 'lite' version, we assume `paths` is a list of raw XPath strings.
+        We combine them into an XPath union filter.
+        """
+        if not paths:
+            return self.session.get()
+            
+        # Combine multiple XPath requests using the union '|' operator
+        xpath_filter = " | ".join(paths)
+        filter_xml = f"""<filter type="xpath" select="{xpath_filter}"/>"""
+        
+        return self.session.get(filter=filter_xml)
+
+    def set(self, updates: list = None, replaces: list = None, deletes: list = None, **kwargs) -> Any:
+        """
+        Executes a NETCONF <edit-config>.
+        A 'lite' implementation requires raw XML strings from the user.
+        (Will be replaced by libyang automated payload generation later).
+        """
+        # Placeholder for lite implementation. 
+        # Advanced edit-config requires strict XML namespacing.
+        raise NotImplementedError("NETCONF Set/Edit-Config is awaiting libyang integration.")
+
+    def subscribe(self, request_iterator: Any) -> Iterator[Any]:
+        """
+        Executes NETCONF Event Notifications (RFC 5277).
+        """
+        self.session.create_subscription()
+        
+        # Generator pattern yielding notifications as they arrive
+        while True:
+            notif = self.session.take_notification(block=True)
+            if notif:
+                yield notif

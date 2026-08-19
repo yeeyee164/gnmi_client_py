@@ -8,7 +8,7 @@ Currently supported common interfaces:
 * client picker: `ClientFactory`
 * simple validator: `ValidatorFactory`
 """
-from specs.client import GNMIClient
+from specs.client import GNMIClient, NetconfClient
 from modules.validate import GNMIValidator
 
 class ClientFactory:
@@ -30,7 +30,7 @@ class ClientFactory:
         if protocol == "gnmi":
             return GNMIClient(target, username, password, **kwargs)
         elif protocol == "netconf":
-            raise NotImplementedError("NETCONF client support is coming soon!")
+            return NetconfClient(target, username, password, **kwargs)
         elif protocol == "restconf":
             raise NotImplementedError("RESTCONF client support is coming soon!")
         else:

@@ -15,7 +15,9 @@ class SecurityProfile:
     tls_server_name: str = ""
     tls_version: str = ""
 
-class TLSProfile:
+    ssh_key: str = ""
+
+class SecurityModule:
     """
     A universal security profile holding X.509 certificates and keys.
     Exports credentials into formats required by different transport libraries.
@@ -85,10 +87,3 @@ class TLSProfile:
         if self.client_key:
             kwargs['key_filename'] = self.client_key
         return kwargs
-
-class SSHProfile:
-    """
-    A universal security profile holding SSH information.
-    Exports credentials into formats required by different transport libraries.
-    """
-    pass

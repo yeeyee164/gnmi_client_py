@@ -17,13 +17,18 @@ class ProtocolFormatter(ABC):
     """
 
     @abstractmethod
-    def format_json(self, raw_data, rpc='json'):
+    def format_json(self, raw_data):
         """Translates the native protocol data into JSON/Python dict"""
         pass
 
     @abstractmethod
     def format_ascii(self, raw_data):
-        """Translates the native protocol data into JSON/Python dict"""
+        """
+        Translates the native protocol data into text
+        
+        For all protocol except gNMI, it will prints exactly same format as
+        that protocol intended.
+        """
         pass
 
 # =====================
@@ -233,17 +238,44 @@ class GNMIFormatter(ProtocolFormatter):
             return text_format.MessageToString(raw_data)
         return str(raw_data)
 
+    def format_xml(self, raw_data):
+        raise NotImplementedError("Not supported yet!")
+
 # ========================
 # NETCONF output formatter(TODO)
 # ========================
 
+import xmltodict
+import xml.dom.minidom
+
 class NETCONFFormatter(ProtocolFormatter):
     """
-    Handles NETCONF-specific messages including XML itself.
-    TODO: not yet implemented
+    Custom parser that translates raw NETCONFF XML responses into clean dictionaries
+    using xmltodict, matching the standard output style of the framework.
     """
-    def format_json(self, raw_data, rpc):
-        raise NotImplementedError("NETCONF support comming soon!")
+    def format_json(self, raw_data, **meta):
+        res = {}
+        if meta:
+            res.update(meta)
 
-    def format_ascii(self, raw_data):
-        raise NotImplementedError("NETCONF support comming soon!")
+        # ncclient returns RPCReply objects
+        xml_str = getattr(raw_data, 'xml', str(raw_data))
+
+        try:
+            parsed = xmltodict.parse(xml_str)
+            res['data'] = parsed
+        except Exception as e:
+            res['data'] = xml_str
+            res['error'] = f"XML Parsing failed: {e}"
+
+        return res
+
+    def format_ascii(self, raw_data, **meta):
+        """Uses minidom to return beautify indented XML."""
+        xml_str = getattr(raw_data, 'xml', str(raw_data))
+
+        try:
+            dom = xml.dom.minidom.parseString(xml_str)
+            return dom.toprettyxml(indend='  ')
+        except Exception:
+            return xml_str
