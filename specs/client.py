@@ -30,7 +30,7 @@ class BaseClient(ABC):
         pass
 
     @abstractmethod
-    def capability(self) -> Any:
+    def capability(self, **kwargs) -> Any:
         pass
 
     @abstractmethod
@@ -70,6 +70,7 @@ class GNMIClient(BaseClient):
             target: str,
             username: str = "",
             password: str = "",
+            security=None,
             **kwargs,
         ):
         self.target = target
@@ -83,7 +84,7 @@ class GNMIClient(BaseClient):
 
         # Configure from keyward arguments
         self.insecure = kwargs.get('insecure', False)
-        self.security = kwargs.get('security', None)
+        self.security = security
         self.encoding = kwargs.get('encoding', "json_ietf")
         self.debug = kwargs.get('debug', False)
 
@@ -257,14 +258,13 @@ class NetconfClient(BaseClient):
     Currently accepts raw XPath strings for its paths.
     Future versions will utilize libyang to translate standard paths to XML Subtrees.
     """
-    def __init__(self, target: str, username: str = "", password: str = "", **kwargs):
+    def __init__(self, target: str, username: str = "", password: str = "",
+                 security=None, **kwargs):
         self.target = target
         self.username = username
         self.password = password
+        self.security = security
         self.session = None
-
-        # unwind kwargs
-        self.security = kwargs.get('security', None)
 
     def __enter__(self):
         host, port = self.target.split(':')
@@ -280,7 +280,8 @@ class NetconfClient(BaseClient):
 
         # Inject SSH Keys from the Security Module if provided
         if self.security:
-            ssh_kwargs = self.security.get_ssh_kwargs()
+            sec_module = SecurityModule(profile=self.security)
+            ssh_kwargs = sec_module.get_ssh_kwargs()
             if ssh_kwargs:
                 netconf_info.update(ssh_kwargs)
 
@@ -295,22 +296,33 @@ class NetconfClient(BaseClient):
         """NETCONF exchanges <hello> when the session has established"""
         return list(self.session.server_capabilities)
 
-    def get(self, paths: list, prefix: str = "", **kwargs) -> Any:
+    def get(self, **kwargs) -> Any:
         """
         Executes a NETCONF <get>.
         In this 'lite' version, we assume `paths` is a list of raw XPath strings.
         We combine them into an XPath union filter.
+
+        It should pass one of arguments
+            - path: list of XPaths
+            - filter: XML formatted string
         """
-        if not paths:
-            return self.session.get()
-            
-        # Combine multiple XPath requests using the union '|' operator
-        xpath_filter = " | ".join(paths)
-        filter_xml = f"""<filter type="xpath" select="{xpath_filter}"/>"""
+
+        # path(XPath)
+        paths = kwargs.get('path', [])
+
+        # filter(XML)
+        filter = kwargs.get('filter', '')
+
+        if len(paths) == 0:
+            filter_xml = filter
+        else:
+            # Combine multiple XPath requests using the union '|' operator
+            xpath_filter = " | ".join(paths)
+            filter_xml = f"""<filter type="xpath" select="{xpath_filter}"/>"""
         
         return self.session.get(filter=filter_xml)
 
-    def set(self, updates: list = None, replaces: list = None, deletes: list = None, **kwargs) -> Any:
+    def set(self, **kwargs) -> Any:
         """
         Executes a NETCONF <edit-config>.
         A 'lite' implementation requires raw XML strings from the user.

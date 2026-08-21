@@ -16,7 +16,8 @@ class ClientFactory:
     Instantiates and returns the appropriate client driver based on the requested protocol.
     """
     @staticmethod
-    def get_client(protocol: str, target: str, username: str = "", password: str = "", **kwargs):
+    def get_client(protocol: str, target: str, username: str = "", password: str = "",
+                   security=None, **kwargs):
         """
         By calling `get_client` class method, you can instantiate and create a client session
         with `protocol`.
@@ -28,9 +29,9 @@ class ClientFactory:
         protocol = protocol.lower()
         
         if protocol == "gnmi":
-            return GNMIClient(target, username, password, **kwargs)
+            return GNMIClient(target, username, password, security, **kwargs)
         elif protocol == "netconf":
-            return NetconfClient(target, username, password, **kwargs)
+            return NetconfClient(target, username, password, security, **kwargs)
         elif protocol == "restconf":
             raise NotImplementedError("RESTCONF client support is coming soon!")
         else:

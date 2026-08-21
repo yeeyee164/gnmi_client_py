@@ -13,26 +13,22 @@ class BaseUnaryWorker:
     Base class for single request-response workers
     """
     def __init__(self, target_ip, target_port, username="",
-                 password="", prefix="", encoding="json_ietf", 
-                 protocol='gnmi', **kwargs):
+                 password="", protocol='gnmi',
+                 security=None, **kwargs):
         self.target_ip = target_ip
         self.target_port = target_port
         self.username = username
         self.password = password
-        self.prefix = prefix
-        self.encoding = encoding
+        self.security = security
         self.protocol = protocol.lower()
+        self.kwargs = kwargs
         self.target = f'{self.target_ip}:{self.target_port}'
 
         raw_id_str = f"{target_ip}:{target_port}:{time.time()}"
         self.session_id = hashlib.md5(str_to_bytes(raw_id_str)).hexdigest()[:10]
 
-        # kwargs
-        self.inseucre = kwargs.get('insecure', False)
-        self.security = kwargs.get('security', None)
-
-        # validator
-        self.validator = ValidatorFactory.get_validator(self.protocol)
+        # validator - TODO
+        # self.validator = ValidatorFactory.get_validator(self.protocol)
     
     def _format_result(self, rpc_name, data):
         """Standardizes the output dictionary for the handlers"""
@@ -49,7 +45,7 @@ class BaseUnaryWorker:
         return ClientFactory.get_client(
             protocol=self.protocol, target=self.target, 
             username=self.username, password=self.password,
-            insecure=self.inseucre, security=self.security
+            security=self.security, **self.kwargs
         )
 
 class CapabilityWorker(BaseUnaryWorker):
@@ -78,13 +74,14 @@ class GetWorker(BaseUnaryWorker):
         logger.debug(f"[Worker(Get) {self.target_ip}] Requesting Get...")
 
         try:
-            #1. validate inputs - TODO
+            #1. validate inputs
+            # TODO: it will be handled by protocol-agnostic validator
             # for path in self.paths:
             #     self.validator.validate_path(path)
 
             #2. create a client session
             with self._get_client() as client:
-                result = client.get(paths=self.paths, encoding=self.encoding, prefix=self.prefix)
+                result = client.get(**self.kwargs)
                 return self._format_result("get", result)
                 
         except grpc.RpcError as e:
@@ -111,15 +108,13 @@ class SetWorker(BaseUnaryWorker):
         logger.debug(f"[Worker(Set) {self.target_ip}] Requesting Set...")
         try:
             #1. validate inputs
-            for path in self.updates + self.replaces:
-                self.validator.validate_path(path, 'set')
+            # TODO: it will be handled by protocol-agnostic validator
+            # for path in self.updates + self.replaces:
+            #     self.validator.validate_path(path, 'set')
 
             #2. create a client session
             with self._get_client() as client:
-                result = client.set(prefix=self.prefix,
-                                    update=self.updates,
-                                    replace=self.replaces,
-                                    delete=self.deletes)
+                result = client.set(**self.kwargs)
                 return self._format_result("Set", result)
         except grpc.RpcError as e:
             logger.error(f"[Worker(Set) {self.target_ip}] gRPC Error: {e.code()} - {e.details()}")

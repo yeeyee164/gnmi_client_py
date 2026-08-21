@@ -234,8 +234,8 @@ class CLIConfigBuilder(ConfigBuilder):
                     prefix=getattr(self.args, "prefix", ""),
                     encoding=getattr(self.args, "encoding", "json_ietf"),
                     get_type=getattr(self.args, "type", ''),
-                    mode=getattr(self.args, "mode", "stream"),
-                    sub_mode=getattr(self.args, "sub_mode", "sample"),
+                    mode=getattr(self.args, "mode", ""),
+                    sub_mode=getattr(self.args, "sub_mode", ""),
                     sample_interval=getattr(self.args, "interval", 0),
                     update_only=getattr(self.args, "update_only", False),
                     updates=getattr(self.args, "updates", []),
@@ -320,7 +320,7 @@ class FileConfigBuilder(ConfigBuilder):
             t_username = tgt_info.get('username', global_username)
             t_password = tgt_info.get('password', global_password)
             t_times = tgt_info.get('times', global_times)
-            t_protocol = tgt_info.get('protocol', self.arg)
+            t_protocol = tgt_info.get('protocol', self.protocol)
             t_insecure = tgt_info.get('insecure', global_insecure)
 
             # possible Get, Set, Subscribe list

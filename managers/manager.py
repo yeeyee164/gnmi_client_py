@@ -3,8 +3,9 @@ import threading
 import queue
 import json
 import concurrent.futures
+import dataclasses
 
-from managers.gnmi_subscribe_session import GNMISession
+from managers.subscribe_session import SubscribeSession
 from managers.unary_worker import GetWorker, SetWorker, CapabilityWorker
 from modules.output import OutputHandler
 from ui.cmd import ParsedConfig
@@ -23,7 +24,7 @@ class BaseRPCManager:
         self.debug = cfg.debug
         self.outputs = cfg.outputs
 
-        self.sessions = [] # Holds the GNMISubscribeSession objects
+        self.sessions = [] # Holds the SubscribeSession objects
         self.output_handlers = []
 
         # Build output handlers once for all managers
@@ -59,28 +60,16 @@ class SubscriptionManager(BaseRPCManager):
                     #TODO: support list-based config
                     ip, port = sc.target.split(':')
 
-                    # Package STREAM-specific args and update-only flag
-                    args = {
-                        'sub_mode' : sc.sub_mode,
-                        'sample_interval' : sc.sample_interval,
-                        'update_only' : sc.update_only,
-                        'insecure': sc.insecure
-                    }
+                    kwargs = dataclasses.asdict(sc)
 
-                    session = GNMISession(
-                        target_ip=ip,
-                        target_port=int(port),
-                        paths=sc.paths,
+                    # remove duplicated fields
+                    kwargs.pop('target', None)
+
+                    session = SubscribeSession(
+                        target_ip=ip, target_port=int(port),
                         data_queue=self.data_queue,
-                        mode = sc.mode,
-                        encoding=sc.encoding,
-                        username=sc.username,
-                        password=sc.password,
-                        prefix=sc.prefix,
-                        subscription_name=sc.subscription_name,
-                        debug=self.debug,
-                        security=sc.security,
-                        **args)
+                        **kwargs
+                    )
 
                     self.sessions.append(session)
                 except ValueError:
@@ -102,8 +91,8 @@ class SubscriptionManager(BaseRPCManager):
             self.threads.append(t)
             t.start()
 
-        # run another thread to invoke Poll mechanism
-        if any(s.mode.lower() == 'poll' for s in self.sessions):
+        # run another thread to invoke Poll mechanism(gNMI)
+        if any(s.kwargs.get('mode','').lower() == 'poll' for s in self.sessions):
             controller_t = threading.Thread(target=self._interactive_poll_controller, daemon=True)
             controller_t.start()
 
@@ -137,7 +126,7 @@ class SubscriptionManager(BaseRPCManager):
 
     def _interactive_poll_controller(self):
         """A simple background CLI to allow users to trigger polls manually."""
-        poll_sessions = [s for s in self.sessions if s.mode.lower() == 'poll']
+        poll_sessions = [s for s in self.sessions if s.kwargs.get('mode','').lower() == 'poll']
         time.sleep(2) # Give streams a moment to connect
         
         # This is an interactive terminal session for POLL.
@@ -184,12 +173,15 @@ class UnaryManager(BaseRPCManager):
         for sc in self.session_configs:
             try:
                 ip, port = sc.target.split(':')
+
+                kwargs = dataclasses.asdict(sc)
+                # remove duplicated fields
+                kwargs.pop('target', None)
+
+                # let each worker handle them
                 session = self.worker_class(
-                    target_ip=ip, target_port=int(port), paths=sc.paths, 
-                    encoding=sc.encoding, username=sc.username, password=sc.password,
-                    insecure=sc.insecure,
-                    prefix=sc.prefix,
-                    security=sc.security
+                    target_ip=ip, target_port=int(port),
+                    **kwargs
                 )
                 self.sessions.append(session)
             except ValueError:
