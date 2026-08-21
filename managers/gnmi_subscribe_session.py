@@ -7,7 +7,7 @@ import traceback
 import logging
 
 from managers.factory import ClientFactory, ValidatorFactory
-from util.encoding import str_to_bytes
+from util.utils import str_to_bytes
 
 logger = logging.getLogger(__name__)
 

@@ -5,7 +5,7 @@ import json
 import concurrent.futures
 
 from managers.gnmi_subscribe_session import GNMISession
-from managers.gnmi_unary_worker import GetWorker, SetWorker, CapabilityWorker
+from managers.unary_worker import GetWorker, SetWorker, CapabilityWorker
 from modules.output import OutputHandler
 from ui.cmd import ParsedConfig
 
@@ -50,7 +50,6 @@ class SubscriptionManager(BaseRPCManager):
         #common channel for worker results
         # this queue supports Locking mechanism
         self.data_queue = queue.Queue()
-        self.security = cfg.security
 
     def build_sessions(self):
         """Parses the targets and instantiates the Worker objects."""
@@ -80,7 +79,7 @@ class SubscriptionManager(BaseRPCManager):
                         prefix=sc.prefix,
                         subscription_name=sc.subscription_name,
                         debug=self.debug,
-                        security=self.security,
+                        security=sc.security,
                         **args)
 
                     self.sessions.append(session)
@@ -180,7 +179,6 @@ class UnaryManager(BaseRPCManager):
         self.worker_class = worker_class
 
         # get global configurations
-        self.security = cfg.security
 
     def build_sessions(self):
         for sc in self.session_configs:
@@ -191,7 +189,7 @@ class UnaryManager(BaseRPCManager):
                     encoding=sc.encoding, username=sc.username, password=sc.password,
                     insecure=sc.insecure,
                     prefix=sc.prefix,
-                    security=self.security
+                    security=sc.security
                 )
                 self.sessions.append(session)
             except ValueError:

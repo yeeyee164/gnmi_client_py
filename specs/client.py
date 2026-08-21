@@ -34,7 +34,7 @@ class BaseClient(ABC):
         pass
 
     @abstractmethod
-    def get(self, paths: list, prefix: str = "", **kwargs) -> Any:
+    def get(self, **kwargs) -> Any:
         """
         Executes a read/fetch operation
         Mapped to gNMI Get, NETCONF <get>/<get-config>, or RESTCONF GET
@@ -42,7 +42,7 @@ class BaseClient(ABC):
         pass
 
     @abstractmethod
-    def set(self, prefix: str="", updates: list=None, deletes: list=None, replaces: list=None, **kwargs) -> Any:
+    def set(self, **kwargs) -> Any:
         """
         Executes a write/edit operation
         Mapped to gNMI Set, NETCONF <edit-config> or RESTCONF PUT/POST/DELETE
@@ -106,9 +106,9 @@ class GNMIClient(BaseClient):
             self.channel = grpc.insecure_channel(self.target)
         elif self.security is not None:
             # create a TLS-based secure communication
-            # tls_profile = TLSProfile(profile=self.security)
-            creds = self.security.get_grpc_credentials()
-            options = self.security.get_grpc_options()
+            sec_module = SecurityModule(profile=self.security)
+            creds = sec_module.get_grpc_credentials()
+            options = sec_module.get_grpc_options()
 
             # set additional options
             self.channel = grpc.secure_channel(self.target, creds, options=options)
@@ -131,10 +131,22 @@ class GNMIClient(BaseClient):
         response = self.stub.Capabilities(request, metadata=self.metadata)
         return response
 
-    def get(self, paths: list, prefix=None, **kwargs) -> gnmi_pb2.GetResponse:
+    def get(self, **kwargs) -> gnmi_pb2.GetResponse:
         """ Executes an Unary Get RPC """
+        prefix = kwargs.get('prefix', "")
+        paths = kwargs.get('paths', [])
+        type = kwargs.get('type', '')
+
+        get_type = {
+            'state': gnmi_pb2.GetRequest.STATE,
+            'config': gnmi_pb2.GetRequest.CONFIG,
+            'operational': gnmi_pb2.GetRequest.OPERATIONAL,
+            '': gnmi_pb2.GetRequest.ALL,
+        }
+
         request = gnmi_pb2.GetRequest(
-            encoding=self.encoding_map[self.encoding]
+            encoding=self.encoding_map[self.encoding],
+            type=get_type[type]
         )
         
         if prefix:
@@ -279,7 +291,8 @@ class NetconfClient(BaseClient):
         if self.session:
             self.session.close_session()
 
-    def capabilities(self) -> Any:
+    def capability(self) -> Any:
+        """NETCONF exchanges <hello> when the session has established"""
         return list(self.session.server_capabilities)
 
     def get(self, paths: list, prefix: str = "", **kwargs) -> Any:

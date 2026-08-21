@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from google.protobuf import text_format
 from modules.path import gnmi_path_to_xpath
 from specs.gnmi.gnmi_pb2 import GetResponse, SetResponse, CapabilityResponse, SubscribeResponse
-from util.encoding import GNMI_ENCODING_TO_STR
+from util.utils import GNMI_ENCODING_TO_STR
 
 class ProtocolFormatter(ABC):
     """

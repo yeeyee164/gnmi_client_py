@@ -3,7 +3,7 @@ import hashlib
 import grpc
 import logging
 
-from util.encoding import str_to_bytes
+from util.utils import str_to_bytes
 from managers.factory import ClientFactory, ValidatorFactory
 
 logger = logging.getLogger(__name__)
@@ -69,17 +69,18 @@ class CapabilityWorker(BaseUnaryWorker):
         return "Capabilities"
 
 class GetWorker(BaseUnaryWorker):
-    def __init__(self, target_ip, target_port, paths, **kwargs):
+    def __init__(self, target_ip, target_port, **kwargs):
         super().__init__(target_ip, target_port, **kwargs)
+        paths = kwargs.get('paths', [])
         self.paths = paths
 
     def start(self):
         logger.debug(f"[Worker(Get) {self.target_ip}] Requesting Get...")
 
         try:
-            #1. validate inputs
-            for path in self.paths:
-                self.validator.validate_path(path)
+            #1. validate inputs - TODO
+            # for path in self.paths:
+            #     self.validator.validate_path(path)
 
             #2. create a client session
             with self._get_client() as client:

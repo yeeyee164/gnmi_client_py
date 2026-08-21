@@ -1,4 +1,5 @@
 import io
+import os
 
 from specs.gnmi import gnmi_pb2
 
@@ -32,3 +33,17 @@ def str_to_bytes(text: str, encoding: str = "utf-8") -> bytes:
         raise ValueError(f'Unknown encoding: {encoding}')
     
     return byte_data
+
+def read_payload(value: str) -> str:
+    """
+    Checks if the provided string is a valid file path.
+    If it is, returns the file contents (great for XML configs/filters).
+    Otherwise, returns the string as-is.
+    """
+    if value and os.path.isfile(value):
+        try:
+            with open(value, 'r', encoding='utf-8') as f:
+                return f.read().strip()
+        except Exception as e:
+            print(f"[CLI Warning] Failed to read payload file '{value}': {e}")
+    return value
