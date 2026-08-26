@@ -55,7 +55,7 @@ class OutputHandler:
         if self.format in ['json', 'json_ietf']:
             meta = {
                 'source': message.get('target'),
-                'subscription-name': message.get('subscription_name'),
+                'subscription-name': message.get('subscription_name', 'none'),
             }
             rpc = message.get('rpc')
             meta = {k: v for k, v in meta.items() if v is not None}

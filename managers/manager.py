@@ -64,11 +64,12 @@ class SubscriptionManager(BaseRPCManager):
 
                     # remove duplicated fields
                     kwargs.pop('target', None)
+                    kwargs.pop('security', None)
 
                     session = SubscribeSession(
                         target_ip=ip, target_port=int(port),
                         data_queue=self.data_queue,
-                        **kwargs
+                        security=sc.security, **kwargs
                     )
 
                     self.sessions.append(session)
@@ -177,11 +178,12 @@ class UnaryManager(BaseRPCManager):
                 kwargs = dataclasses.asdict(sc)
                 # remove duplicated fields
                 kwargs.pop('target', None)
+                kwargs.pop('security', None)
 
                 # let each worker handle them
                 session = self.worker_class(
                     target_ip=ip, target_port=int(port),
-                    **kwargs
+                    security=sc.security, **kwargs
                 )
                 self.sessions.append(session)
             except ValueError:
@@ -208,7 +210,7 @@ class UnaryManager(BaseRPCManager):
                         for handler in self.output_handlers:
                             handler.write(result)
                 except Exception as exc:
-                    logger.error(f"[Worker({str(self.worker_class)}) {session.target_ip}] generated an exception: {exc}")
+                    logger.error(f"[{self.worker_class.__name__} {session.target_ip}] generated an exception: {exc}")
         self.shutdown()
 
 class ManagerFactory:

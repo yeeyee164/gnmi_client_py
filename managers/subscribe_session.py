@@ -34,9 +34,6 @@ class SubscribeSession:
         # validator - TODO
         # self.validator = ValidatorFactory.get_validator(self.protocol)
 
-        # secure/insecure connection settings
-        #self.insecure = kwargs.get('insecure', False)
-
         # some global options such as debug flag
         self.debug = kwargs.get('debug', False)
 

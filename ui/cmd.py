@@ -142,6 +142,7 @@ class NetconfSessionConfig(BaseSessionConfig):
     - config: request <rpc> for <config>
     """
 
+    device: str = "default"
     source: str = "running"
     target_datastore: str = "candidate"
     filter: str = ""
@@ -250,7 +251,8 @@ class CLIConfigBuilder(ConfigBuilder):
                     filter=read_payload(getattr(self.args, "filter", "")),
                     config=read_payload(getattr(self.args, "nc-config", "")),
                     source=getattr(self.args, "source", ""),
-                    target_datastore=getattr(self.args, "target-datastore", "candidate")
+                    target_datastore=getattr(self.args, "target-datastore", "candidate"),
+                    device=getattr(self.args, "device", "default")
                 )
             else:
                 raise ValueError(f"Unknown protocol: {protocol}")

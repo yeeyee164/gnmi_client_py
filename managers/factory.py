@@ -10,6 +10,7 @@ Currently supported common interfaces:
 """
 from specs.client import GNMIClient, NetconfClient
 from modules.validate import GNMIValidator
+from modules.security import SecurityModule
 
 class ClientFactory:
     """
@@ -25,13 +26,21 @@ class ClientFactory:
         Args:
             `protocol`: Client for Northbound Protocol. Currently only gNMI is supported.
             `target`: a string formatted of "IP addr:PORT"
+            `username`, `password`: authentication via ID/PW
+            `security`: `SecurityProfile` from session config dataclass
+            `kwargs`: for any parameters that want to pass. NOTE: Each client class only uses is partially.
         """
+        security_module = SecurityModule(security) if security else None
         protocol = protocol.lower()
         
         if protocol == "gnmi":
-            return GNMIClient(target, username, password, security, **kwargs)
+            return GNMIClient(target, username, password,
+                              security_module,
+                              insecure=kwargs.get('insecure', False))
         elif protocol == "netconf":
-            return NetconfClient(target, username, password, security, **kwargs)
+            return NetconfClient(target, username, password,
+                                security_module,
+                                device=kwargs.get('device', 'default'))
         elif protocol == "restconf":
             raise NotImplementedError("RESTCONF client support is coming soon!")
         else:

@@ -54,7 +54,7 @@ class CapabilityWorker(BaseUnaryWorker):
 
         try:
             with self._get_client() as client:
-                result = client.capability()
+                result = client.capability(**self.kwargs)
                 return self._format_result("capability", result)
                 
         except grpc.RpcError as e:

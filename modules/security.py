@@ -2,6 +2,9 @@ import os
 import grpc
 
 from dataclasses import dataclass
+import logging
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class SecurityProfile:
@@ -23,19 +26,30 @@ class SecurityModule:
     Exports credentials into formats required by different transport libraries.
     """
     def __init__(self, profile: SecurityProfile):
-        self.ca_cert = profile.tls_ca
-        self.client_cert = profile.tls_cert
-        self.client_key = profile.tls_key
-        self.skip_verify = profile.skip_verify
-        self.tls_server_name = profile.tls_server_name
-        self.tls_version = profile.tls_version
+        # Gracefully handle if profile is a dictionary (from dataclasses.asdict) or an object
+        if isinstance(profile, dict):
+            self.ca_cert = profile.get('tls_ca', "")
+            self.client_cert = profile.get('tls_cert', "")
+            self.client_key = profile.get('tls_key', "")
+            self.skip_verify = profile.get('skip_verify', False)
+            self.tls_server_name = profile.get('tls_server_name', "")
+            self.tls_version = profile.get('tls_version',"1.3")
+            self.ssh_key = profile.get('ssh_key', "")
+        else:
+            self.ca_cert = getattr(profile, 'tls_ca', "")
+            self.client_cert = getattr(profile, 'tls_cert', "")
+            self.client_key = getattr(profile, 'tls_key', "")
+            self.skip_verify = getattr(profile, 'skip_verify', False)
+            self.tls_server_name = getattr(profile, 'tls_server_name', "")
+            self.tls_version = getattr(profile, 'tls_version', "1.3")
+            self.ssh_key = getattr(profile, 'ssh_key', "")
 
     def _read_file(self, path):
         if path and os.path.exists(path):
             with open(path, 'rb') as f:
                 return f.read()
         elif path:
-            print(f"[Security] Warning: Credential file not found at {path}")
+            logger.error(f"[Security] Warning: Credential file not found at {path}")
         return None
 
     def get_grpc_credentials(self):
@@ -44,12 +58,12 @@ class SecurityModule:
         private_key = self._read_file(self.client_key)
         cert_chain = self._read_file(self.client_cert)
 
-        if not private_key and not cert_chain:
+        if not private_key and not cert_chain and not root_certs:
             # If the user asks for TLS features, they expect an encrypted secure channel
             if self.skip_verify or self.tls_server_name:
                 if self.skip_verify:
-                    print(f"[Security] Python gRPC cannot modify its options - but It will be create an TLS session without any credentials")
-                    return grpc.ssl_channel_credentials(root_certificates=root_certs)
+                    logger.warning(f"[Security] Python gRPC cannot modify its options - but It will be create an TLS session without any credentials")
+                    return grpc.ssl_channel_credentials()
             return None
 
         return grpc.ssl_channel_credentials(

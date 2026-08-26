@@ -1,4 +1,5 @@
 import grpc
+import logging
 from typing import Iterator, Any, Optional
 from abc import ABC, abstractmethod
 
@@ -9,6 +10,8 @@ from modules.security import SecurityModule
 
 #define some global variables
 NANOSECOND = 1000000000
+
+logger = logging.getLogger(__name__)
 
 class BaseClient(ABC):
     """
@@ -70,7 +73,7 @@ class GNMIClient(BaseClient):
             target: str,
             username: str = "",
             password: str = "",
-            security=None,
+            security_module=None,
             **kwargs,
         ):
         self.target = target
@@ -84,7 +87,7 @@ class GNMIClient(BaseClient):
 
         # Configure from keyward arguments
         self.insecure = kwargs.get('insecure', False)
-        self.security = security
+        self.security_module = security_module
         self.encoding = kwargs.get('encoding', "json_ietf")
         self.debug = kwargs.get('debug', False)
 
@@ -105,11 +108,10 @@ class GNMIClient(BaseClient):
 
         if self.insecure:
             self.channel = grpc.insecure_channel(self.target)
-        elif self.security is not None:
+        elif self.security_module is not None:
             # create a TLS-based secure communication
-            sec_module = SecurityModule(profile=self.security)
-            creds = sec_module.get_grpc_credentials()
-            options = sec_module.get_grpc_options()
+            creds = self.security_module.get_grpc_credentials()
+            options = self.security_module.get_grpc_options()
 
             # set additional options
             self.channel = grpc.secure_channel(self.target, creds, options=options)
@@ -124,7 +126,7 @@ class GNMIClient(BaseClient):
         if self.channel:
             self.channel.close()
 
-    def capability(self) -> gnmi_pb2.CapabilityResponse:
+    def capability(self, **kwargs) -> gnmi_pb2.CapabilityResponse:
         """ Executes an Unary Capabilities RPC """
         request = gnmi_pb2.CapabilityRequest()
         
@@ -242,7 +244,7 @@ class GNMIClient(BaseClient):
                         poll_req.poll.SetInParent()
                         yield poll_req
             except Exception as e:
-                print(f"[Client error] Exception in pb_generator: {e}")
+                logger.error(f"[Client] Exception in pb_generator: {e}")
                 if self.debug:
                     import traceback
                     traceback.print_exc()
@@ -259,12 +261,14 @@ class NetconfClient(BaseClient):
     Future versions will utilize libyang to translate standard paths to XML Subtrees.
     """
     def __init__(self, target: str, username: str = "", password: str = "",
-                 security=None, **kwargs):
+                 security_module=None, **kwargs):
         self.target = target
         self.username = username
         self.password = password
-        self.security = security
+        self.security_module = security_module
         self.session = None
+
+        self.device = kwargs.get('device', 'default')
 
     def __enter__(self):
         host, port = self.target.split(':')
@@ -275,16 +279,17 @@ class NetconfClient(BaseClient):
             'port': int(port),
             'username': self.username,
             'password': self.password,
+            'device_params': {"name": self.device},
             'hostkey_verify': False  # Allow unknown SSH host keys for testing
         }
 
         # Inject SSH Keys from the Security Module if provided
-        if self.security:
-            sec_module = SecurityModule(profile=self.security)
-            ssh_kwargs = sec_module.get_ssh_kwargs()
+        if self.security_module:
+            ssh_kwargs = self.security_module.get_ssh_kwargs()
             if ssh_kwargs:
                 netconf_info.update(ssh_kwargs)
 
+        # create a session
         self.session = manager.connect(**netconf_info)
         return self
 
@@ -292,9 +297,12 @@ class NetconfClient(BaseClient):
         if self.session:
             self.session.close_session()
 
-    def capability(self) -> Any:
+    def capability(self, **kwargs) -> Any:
         """NETCONF exchanges <hello> when the session has established"""
-        return list(self.session.server_capabilities)
+        cap_list = ""
+        with self.session as s:
+            cap_list = s.server_capabilities
+        return cap_list
 
     def get(self, **kwargs) -> Any:
         """
