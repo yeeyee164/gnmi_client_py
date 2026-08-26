@@ -295,14 +295,18 @@ class NetconfClient(BaseClient):
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self.session:
-            self.session.close_session()
+            try:
+                if self.session.connected:
+                    self.session.close_session()
+            except Exception:
+                # Suppress teardown exceptions so they don't override and destroy
+                # the successful RPC data returned inside the 'with' block
+                pass
+            
 
     def capability(self, **kwargs) -> Any:
         """NETCONF exchanges <hello> when the session has established"""
-        cap_list = ""
-        with self.session as s:
-            cap_list = s.server_capabilities
-        return cap_list
+        return list(self.session.server_capabilities)
 
     def get(self, **kwargs) -> Any:
         """
@@ -318,6 +322,9 @@ class NetconfClient(BaseClient):
         # path(XPath)
         paths = kwargs.get('path', [])
 
+        # source
+        source = kwargs.get('source', '')
+
         # filter(XML)
         filter = kwargs.get('filter', '')
 
@@ -327,8 +334,12 @@ class NetconfClient(BaseClient):
             # Combine multiple XPath requests using the union '|' operator
             xpath_filter = " | ".join(paths)
             filter_xml = f"""<filter type="xpath" select="{xpath_filter}"/>"""
-        
-        return self.session.get(filter=filter_xml)
+
+        # <get>
+        if source == '':
+            return self.session.get(filter=filter_xml)
+        else: # <get-config>
+            return self.session.get_config(source=source, filter=filter_xml)
 
     def set(self, **kwargs) -> Any:
         """

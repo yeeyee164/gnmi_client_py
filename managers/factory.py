@@ -28,7 +28,7 @@ class ClientFactory:
             `target`: a string formatted of "IP addr:PORT"
             `username`, `password`: authentication via ID/PW
             `security`: `SecurityProfile` from session config dataclass
-            `kwargs`: for any parameters that want to pass. NOTE: Each client class only uses is partially.
+            `kwargs`: for any parameters that want to pass. NOTE: Each client class only uses it partially.
         """
         security_module = SecurityModule(security) if security else None
         protocol = protocol.lower()

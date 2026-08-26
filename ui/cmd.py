@@ -24,48 +24,6 @@ class FileConfigError(Exception):
     pass
 
 @dataclass
-class SessionConfig:
-    """
-    Represents a specific subscription payload paired with a specific target.
-    """
-    target: str           # IP:PORT
-    paths: List[str]      # List of gNMI paths
-    subscription_name: str # For logging/tracking
-
-    operation: str = "subscribe" # subscribe, get, set, capability
-    mode: str = ""         # STREAM, ONCE, POLL
-
-    # 'Global' options
-
-    prefix: str = ""
-    encoding: str = "json_ietf"
-    username: str = ""
-    password: str = ""
-    update_only: bool = False
-    times: int = 1
-    insecure: bool = False
-    protocol: str = "gnmi"
-
-    # STREAM specific attributes
-    sub_mode: Optional[str] = None
-    sample_interval: int = 0
-
-    # Set specific attributes
-
-    # list of ('path', 'value')
-    updates: list = field(default_factory=list)
-    replaces: list = field(default_factory=list)
-
-    # list of ('path')
-    deletes: list = field(default_factory=list)
-
-    def __str__(self):
-        return f"""\t\tSessionConfig(target={self.target}, path={self.paths}, operation={self.operation}, mode={self.mode}, 
-            subscription_name={self.subscription_name}, prefix={self.prefix}, encoding={self.encoding}, 
-            username={self.username}, update_only={self.update_only}, insecure={self.insecure},
-            times={self.times}, sub_mode={self.sub_mode}, sample_interval={self.sample_interval})"""
-
-@dataclass
 class BaseSessionConfig:
     """
     Universal connection details shared across all protocols
@@ -162,7 +120,7 @@ class ParsedConfig:
     debug: bool = False           # Global debug flag
 
     # for logging this script
-    log_level: str = "INFO"
+    log_level: str = "ERROR"
     syslog_server: str = ""
     log_file: str = ""
 
@@ -435,7 +393,7 @@ class FileConfigBuilder(ConfigBuilder):
         return ParsedConfig(
             sessions=sessions, targets=targets,
             outputs=outputs, debug=debug,
-            log_level=d.get('log_level', 'INFO'),
+            log_level=d.get('log_level', 'ERROR'),
             syslog_server=d.get('syslog_server', ''),
             log_file=d.get('log_file', ''),
         )
@@ -449,16 +407,14 @@ def build_args() -> argparse.Namespace:
     parser.add_argument('--times', default=1, type=int, help="Generate duplicated requests - only use for testing")
     parser.add_argument('--username', default='', help="Username")
     parser.add_argument('--password', default='', help="Password")
-    parser.add_argument('-e', '--encoding', default='json_ietf',
-                        help="encoding formats defined at gNMI", 
-                        choices=['json', 'json_ietf', 'bytes', 'proto', 'ascii'])
     parser.add_argument('-i', '--insecure', action='store_true',
                         help="use insecure connection if set True")
 
     # output specifiers
     parser.add_argument('--output-type', default='file', help="Type of output data.")
     parser.add_argument('--output-file-type', default='stdout', help="direction of output data.")
-    parser.add_argument('--output-format', default='json', help="Specify output format.")
+    parser.add_argument('--output-format', default='json',
+                        help="Specify output format.", choices=['json', 'text', 'xml'])
 
     # security options
     parser.add_argument('--tls-ca', default='', help="Path to CA certificate")
@@ -471,7 +427,7 @@ def build_args() -> argparse.Namespace:
     parser.add_argument('--ssh-key', help="Path to SSH key")
     
     # logger
-    parser.add_argument('--log-level', default='INFO',
+    parser.add_argument('--log-level', default='ERROR',
                         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
                         help="Set logging level")
     parser.add_argument('--syslog-server', default='', help="IP:PORT of Syslog server")
@@ -517,6 +473,9 @@ def gnmi_args(parser):
 
     # config file for gNMI
     parser_gnmi.add_argument('-c', '--config', default='', help='Path to YAML configuration file for gNMI RPCs')
+    parser_gnmi.add_argument('-e', '--encoding', default='json_ietf',
+                        help="encoding formats defined at gNMI", 
+                        choices=['json', 'json_ietf', 'bytes', 'proto', 'ascii'])
 
     # Top-Level Operation Parser
     subparsers = parser_gnmi.add_subparsers(dest='operation', help="specify gNMI RPC operation")

@@ -22,13 +22,18 @@ class ProtocolFormatter(ABC):
         pass
 
     @abstractmethod
-    def format_ascii(self, raw_data):
+    def format_text(self, raw_data):
         """
         Translates the native protocol data into text
         
         For all protocol except gNMI, it will prints exactly same format as
         that protocol intended.
         """
+        pass
+
+    @abstractmethod
+    def format_xml(self, raw_data):
+        """Translates the native protocol data into XML"""
         pass
 
 # =====================
@@ -233,7 +238,7 @@ class GNMIFormatter(ProtocolFormatter):
         # If it already forms dict/json, just return itself
         return str(raw_data)
 
-    def format_ascii(self, raw_data):
+    def format_text(self, raw_data):
         if hasattr(raw_data, 'DESCRIPTOR'):
             return text_format.MessageToString(raw_data)
         return str(raw_data)
@@ -258,20 +263,37 @@ class NETCONFFormatter(ProtocolFormatter):
         if meta:
             res.update(meta)
 
+        rpc = res.get('rpc')
+
         # ncclient returns RPCReply objects
         xml_str = getattr(raw_data, 'xml', str(raw_data))
 
         try:
-            parsed = xmltodict.parse(xml_str)
-            res['data'] = parsed
+            # in response of <hello> message
+            if rpc == 'capability':
+                res['data'] = raw_data
+            else:
+                parsed = xmltodict.parse(xml_str)
+                res['data'] = parsed
         except Exception as e:
             res['data'] = xml_str
             res['error'] = f"XML Parsing failed: {e}"
 
         return res
 
-    def format_ascii(self, raw_data, **meta):
+    def format_text(self, raw_data, **meta):
+        """print the output AS-IS presented"""
+        
+        return raw_data
+
+    def format_xml(self, raw_data, **meta):
         """Uses minidom to return beautify indented XML."""
+        rpc = meta.get('rpc')
+
+        # in response of <hello> message
+        if rpc == 'capability':
+            return raw_data
+
         xml_str = getattr(raw_data, 'xml', str(raw_data))
 
         try:

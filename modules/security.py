@@ -63,8 +63,8 @@ class SecurityModule:
             if self.skip_verify or self.tls_server_name:
                 if self.skip_verify:
                     logger.warning(f"[Security] Python gRPC cannot modify its options - but It will be create an TLS session without any credentials")
-                    return grpc.ssl_channel_credentials()
-            return None
+            # Return empty credentials anyway
+            return grpc.ssl_channel_credentials()
 
         return grpc.ssl_channel_credentials(
             root_certificates=root_certs,
