@@ -101,10 +101,20 @@ class NetconfSessionConfig(BaseSessionConfig):
     """
 
     device: str = "default"
+
+    # <get>, <get-config>
+    nc_xpath: List[str] = field(default_factory=list)
     source: str = "running"
     target_datastore: str = "candidate"
     filter: str = ""
     config: str = ""
+
+    # <get-schema>
+    identifier: str = ''
+    version: str = ''
+    schema_format: str = 'yang'
+
+    #TODO: may be we need to separate them per type of RPC...
 
 @dataclass
 class ParsedConfig:
@@ -207,10 +217,14 @@ class CLIConfigBuilder(ConfigBuilder):
                     username=self.args.username, password=self.args.password,
                     security=security_profile, subscription_name="cli_execution",
                     filter=read_payload(getattr(self.args, "filter", "")),
-                    config=read_payload(getattr(self.args, "nc-config", "")),
+                    config=read_payload(getattr(self.args, "nc_config", "")),
                     source=getattr(self.args, "source", ""),
                     target_datastore=getattr(self.args, "target-datastore", "candidate"),
-                    device=getattr(self.args, "device", "default")
+                    device=getattr(self.args, "device", "default"),
+                    nc_xpath=getattr(self.args, "nc-xpath", []),
+                    version=getattr(self.args, "version", ""),
+                    identifier=getattr(self.args, "identifier", ""),
+                    schema_format=getattr(self.args, "schema_format", "yang"),
                 )
             else:
                 raise ValueError(f"Unknown protocol: {protocol}")
@@ -455,11 +469,25 @@ def netconf_args(parser):
     # <hello>
     parser_cap = subparsers.add_parser('capability', help="Fetch NETCONF Server Capabilities")
 
-    # <get>, <get-config>
-    parser_get = subparsers.add_parser('get', help="NETCONF <get> or <get-config>")
-    parser_get.add_argument('--source', default='', help="specify one of 'running', 'candidate', 'startup' if you want to request <get-config> or do not present for <get>")
+    # <get>
+    parser_get = subparsers.add_parser('get', help="NETCONF <get>")
     parser_get.add_argument('--filter', default='',
                             help="XML filter string or path to file. If given path not exists, consider it as a 'XML' formatted request")
+    parser_get.add_argument('--nc-xpath', action='append', help="List of selected NETCONF XPaths")
+
+    # <get-config>
+    parser_get_config = subparsers.add_parser('get-config', help="NETCONF <get-config>")
+    parser_get_config.add_argument('--source', default='', help="specify one of 'running', 'candidate', 'startup' if you want to request <get-config> or do not present for <get>")
+    parser_get_config.add_argument('--filter', default='',
+                            help="XML filter string or path to file. If given path not exists, consider it as a 'XML' formatted request")
+    parser_get_config.add_argument('--nc-xpath', action='append', help="List of selected NETCONF XPaths")
+
+    # <get-schema>
+    parser_get_schema = subparsers.add_parser('get-schema', help="NETCONF <get-schema>")
+    parser_get_schema.add_argument('--identifier', default='',
+                                   help="Identifier for the schema list entry.", required=True)
+    parser_get_schema.add_argument('--version', help="Version of the schema requested")
+    parser_get_schema.add_argument('--schema-format', default='yang', help="The data modeling language of the schema")
 
     # <edit-config>
     parser_set = subparsers.add_parser('set', help="NETCONF <edit-config>")

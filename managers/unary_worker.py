@@ -30,13 +30,13 @@ class BaseUnaryWorker:
         # validator - TODO
         # self.validator = ValidatorFactory.get_validator(self.protocol)
     
-    def _format_result(self, rpc_name, data):
+    def _format_result(self, default_rpc_name, data):
         """Standardizes the output dictionary for the handlers"""
 
         return {
             'session_id': self.session_id,
             'target': self.target,
-            'rpc': rpc_name,
+            'rpc': self.kwargs.get('operation', default_rpc_name),
             'data': data,
         }
 

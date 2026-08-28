@@ -244,9 +244,9 @@ class ManagerFactory:
 
             if op in ['subscribe', 'stream', 'once', 'poll']:
                 manager = SubscriptionManager(cfg=cfg)
-            elif op == 'get':
+            elif op in ['get', 'get-config', 'get-schema']:
                 manager = UnaryManager(cfg, GetWorker)
-            elif op == 'set':
+            elif op in ['set', 'edit-config']:
                 manager =  UnaryManager(cfg, SetWorker)
             elif op == 'capability':
                 manager = UnaryManager(cfg, CapabilityWorker)

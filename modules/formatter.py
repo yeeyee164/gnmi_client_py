@@ -265,26 +265,47 @@ class NETCONFFormatter(ProtocolFormatter):
 
         rpc = res.get('rpc')
 
-        # ncclient returns RPCReply objects
-        xml_str = getattr(raw_data, 'xml', str(raw_data))
+        if rpc == 'capability':
+            res['data'] = raw_data
 
-        try:
-            # in response of <hello> message
-            if rpc == 'capability':
-                res['data'] = raw_data
-            else:
+        # ncclient returns RPCReply objects
+        xml_node = getattr(raw_data, 'xml', raw_data)
+
+        # ncclient's RPCError stores the raw XML as an lxml Element
+        if not isinstance(xml_node, str):
+            try:
+                # in response of <hello> message
+                from lxml import etree
+                if isinstance(xml_node, etree._Element):
+                    xml_str = etree.tostring(xml_node, encoding='unicode')
+                else:
+                    xml_str = str(xml_node)
                 parsed = xmltodict.parse(xml_str)
                 res['data'] = parsed
-        except Exception as e:
-            res['data'] = xml_str
-            res['error'] = f"XML Parsing failed: {e}"
+            except Exception as e:
+                res['data'] = str(xml_node)
+                res['error'] = f"XML Parsing failed: {e}"
 
         return res
 
     def format_text(self, raw_data, **meta):
         """print the output AS-IS presented"""
+        # ncclient returns RPCReply objects
+        xml_node = getattr(raw_data, 'xml', raw_data)
+
+        # ncclient's RPCError stores the raw XML as an lxml Element
+        if not isinstance(xml_node, str):
+            try:
+                # in response of <hello> message
+                from lxml import etree
+                if isinstance(xml_node, etree._Element):
+                    xml_str = etree.tostring(xml_node, encoding='unicode')
+                else:
+                    xml_str = str(xml_node)
+            except Exception:
+                xml_str = str(xml_node)
         
-        return raw_data
+        return xml_str
 
     def format_xml(self, raw_data, **meta):
         """Uses minidom to return beautify indented XML."""

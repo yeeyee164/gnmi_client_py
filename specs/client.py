@@ -253,7 +253,7 @@ class GNMIClient(BaseClient):
         # The stub returns an iterator that continuously yields SubscribeResponses as they arrive
         return self.stub.Subscribe(pb_generator(), metadata=self.metadata)
 
-from ncclient import manager
+from ncclient import manager, operations
 class NetconfClient(BaseClient):
     """
     A "Lite" NETCONF Client utilizing ncclient.
@@ -310,7 +310,7 @@ class NetconfClient(BaseClient):
 
     def get(self, **kwargs) -> Any:
         """
-        Executes a NETCONF <get>.
+        Executes a NETCONF <get>, <get-config>, <get-schema>.
         In this 'lite' version, we assume `paths` is a list of raw XPath strings.
         We combine them into an XPath union filter.
 
@@ -318,28 +318,64 @@ class NetconfClient(BaseClient):
             - path: list of XPaths
             - filter: XML formatted string
         """
+        try:
+            # path(XPath)
+            paths = kwargs.get('path', [])
 
-        # path(XPath)
-        paths = kwargs.get('path', [])
+            op = kwargs.get('operation', 'get').lower()
 
-        # source
-        source = kwargs.get('source', '')
+            # ==========================================
+            # 1. Schema Discovery (<get-schema>)
+            # ==========================================
+            identifier = kwargs.get('identifier')
+            if op == 'get-schema' or identifier:
+                ident = identifier or (paths[0] if paths else None)
+                if not ident:
+                    raise ValueError("An Identifier (YANG module name) is required for <get-schema>")
 
-        # filter(XML)
-        filter = kwargs.get('filter', '')
+                version = kwargs.get('version', "")
+                fmt = kwargs.get('format', 'yang')
 
-        if len(paths) == 0:
-            filter_xml = filter
-        else:
-            # Combine multiple XPath requests using the union '|' operator
-            xpath_filter = " | ".join(paths)
-            filter_xml = f"""<filter type="xpath" select="{xpath_filter}"/>"""
+                return self.session.get_schema(identifier=ident, version=version, format=fmt)
 
-        # <get>
-        if source == '':
-            return self.session.get(filter=filter_xml)
-        else: # <get-config>
-            return self.session.get_config(source=source, filter=filter_xml)
+            # ==========================================
+            # 2. Build XML Filter (File / String / XPath)
+            # ==========================================
+
+            # source
+            source = kwargs.get('source', '')
+
+            # filter(XML)
+            filter = kwargs.get('filter', '')
+
+            if len(paths) == 0:
+                filter_xml = filter
+            else:
+                # Combine multiple XPath requests using the union '|' operator
+                xpath_filter = " | ".join(paths)
+                filter_xml = f"""<filter type="xpath" select="{xpath_filter}"/>"""
+
+            # ==========================================
+            # 3. Execute <get> or <get-config>
+            # ==========================================
+
+            print(f"Operation: {op}, source: {source}")
+
+            # <get-config>
+            if op == 'get-config':
+                src = source if source else 'running'
+                if filter_xml:
+                    return self.session.get_config(source=src, filter=filter_xml)
+                else:
+                    return self.session.get_config(source=src)
+            else: # <get>
+                if filter_xml:
+                    return self.session.get(filter=filter_xml)
+                else: return self.session.get()
+        except operations.RPCError as e:
+            # Catch the ncclient RPCError so it doesn't crash the worker thread.
+            # And it present <rpc-error> as a result of <rpc>.
+            return e
 
     def set(self, **kwargs) -> Any:
         """
