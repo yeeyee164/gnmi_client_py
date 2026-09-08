@@ -1,11 +1,17 @@
+from __future__ import annotations
 import os
-import grpc
+try:
+    import grpc
+    from specs.gnmi import gnmi_pb2, gnmi_pb2_grpc
+except ImportError:
+    grpc = None
+    gnmi_pb2 = None
+    gnmi_pb2_grpc = None
+
 import logging
 from typing import Iterator, Any, Optional
 from abc import ABC, abstractmethod
 
-# Assuming you generated these using grpc_tools.protoc
-from specs.gnmi import gnmi_pb2, gnmi_pb2_grpc
 from modules.path import parse_path
 from modules.security import SecurityModule
 
@@ -254,7 +260,11 @@ class GNMIClient(BaseClient):
         # The stub returns an iterator that continuously yields SubscribeResponses as they arrive
         return self.stub.Subscribe(pb_generator(), metadata=self.metadata)
 
-from ncclient import manager, operations
+try:
+    from ncclient import manager, operations
+except ImportError:
+    manager = None
+    operations = None
 class NetconfClient(BaseClient):
     """
     A "Lite" NETCONF Client utilizing ncclient.

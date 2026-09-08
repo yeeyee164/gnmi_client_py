@@ -38,6 +38,42 @@ class BaseSessionConfig:
     protocol: str = "gnmi"
     security: SecurityProfile = field(default_factory=SecurityProfile)
 
+    @property
+    def target_ip(self) -> str:
+        """Extract IP address or hostname from target, supporting IPv4, bracketed IPv6, and hostnames."""
+        if not self.target:
+            return ""
+        if self.target.startswith('['):
+            closing_bracket = self.target.find(']')
+            if closing_bracket != -1:
+                return self.target[1:closing_bracket]
+        if ':' in self.target:
+            parts = self.target.split(':')
+            if len(parts) == 2 and parts[1].isdigit():
+                return parts[0]
+        return self.target.strip('[]')
+
+    @property
+    def target_port(self) -> int:
+        """Extract port number from target, or return 0 if omitted."""
+        if not self.target:
+            return 0
+        if self.target.startswith('['):
+            closing_bracket = self.target.find(']')
+            if closing_bracket != -1 and closing_bracket < len(self.target) - 1:
+                remainder = self.target[closing_bracket + 1:]
+                if remainder.startswith(':'):
+                    try:
+                        return int(remainder[1:])
+                    except ValueError:
+                        return 0
+            return 0
+        if ':' in self.target:
+            parts = self.target.split(':')
+            if len(parts) == 2 and parts[1].isdigit():
+                return int(parts[1])
+        return 0
+
 
 @dataclass
 class GNMISessionConfig(BaseSessionConfig):

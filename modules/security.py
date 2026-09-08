@@ -1,5 +1,8 @@
 import os
-import grpc
+try:
+    import grpc
+except ImportError:
+    grpc = None
 
 from dataclasses import dataclass
 import logging

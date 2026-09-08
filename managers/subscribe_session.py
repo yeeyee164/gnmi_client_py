@@ -4,6 +4,7 @@ import hashlib
 import queue
 import traceback
 import logging
+import dataclasses
 
 from managers.factory import ClientFactory, ValidatorFactory
 from util.utils import str_to_bytes
@@ -18,32 +19,46 @@ class SubscribeSession:
     NOTE: It may contain protocol-specific features.
     """
 
-    def __init__(self, target_ip, target_port, data_queue,
+    def __init__(self, target_ip=None, target_port=None, data_queue=None,
                  protocol="gnmi", username="", password="",
-                 security=None, subscription_name="default_sub", **kwargs):
-        self.target_ip = target_ip
-        self.target_port = target_port
-        self.username = username
-        self.password = password
-        self.protocol = protocol.lower()
-        self.subscription_name = subscription_name
-        self.security = security
-        self.kwargs = kwargs
+                 security=None, subscription_name="default_sub",
+                 config=None, **kwargs):
+        self.data_queue = data_queue
+        self.config = config
+
+        if config is not None:
+            self.target_ip = config.target_ip
+            self.target_port = config.target_port
+            self.username = config.username
+            self.password = config.password
+            self.protocol = config.protocol.lower() if config.protocol else "gnmi"
+            self.security = config.security
+            self.subscription_name = config.subscription_name
+            self.kwargs = dataclasses.asdict(config)
+            for k in ['target', 'security', 'username', 'password', 'protocol']:
+                self.kwargs.pop(k, None)
+            self.kwargs.update(kwargs)
+        else:
+            self.target_ip = target_ip
+            self.target_port = target_port
+            self.username = username
+            self.password = password
+            self.protocol = protocol.lower() if protocol else "gnmi"
+            self.security = security
+            self.subscription_name = subscription_name
+            self.kwargs = kwargs
 
         # validator - TODO
         # self.validator = ValidatorFactory.get_validator(self.protocol)
 
         # some global options such as debug flag
-        self.debug = kwargs.get('debug', False)
-
-        # queue from manager
-        self.data_queue = data_queue
+        self.debug = self.kwargs.get('debug', False)
 
         # build necessary payloads
         self.target = f'{self.target_ip}:{self.target_port}'
 
         # set session id
-        raw_id_str = f"{target_ip}:{target_port}:{subscription_name}:{time.time()}"
+        raw_id_str = f"{self.target_ip}:{self.target_port}:{self.subscription_name}:{time.time()}"
         self.session_id = hashlib.md5(str_to_bytes(raw_id_str)).hexdigest()[:10]
         
         # State control flag for clean thread shutdown
@@ -86,10 +101,13 @@ class SubscribeSession:
             # for path in self.paths:
             #     self.validator.validate_path(path)
             
+            client_kwargs = dict(self.kwargs)
+            for k in ['target', 'security', 'username', 'password', 'protocol']:
+                client_kwargs.pop(k, None)
             with ClientFactory.get_client(
                 protocol=self.protocol, target=self.target,
                 username=self.username, password=self.password,
-                security=self.security, **self.kwargs) as client:
+                security=self.security, **client_kwargs) as client:
                 response_stream = client.subscribe(request_generator())
                 
                 for raw_response in response_stream:

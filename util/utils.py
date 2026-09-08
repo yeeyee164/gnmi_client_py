@@ -1,16 +1,19 @@
 import io
 import os
 
-from specs.gnmi import gnmi_pb2
-
-# gNMI encoding mapper
-GNMI_ENCODING_TO_STR = {
-    gnmi_pb2.JSON_IETF: "json_ietf",
-    gnmi_pb2.JSON: "json",
-    gnmi_pb2.PROTO: "proto",
-    gnmi_pb2.ASCII: "ascii",
-    gnmi_pb2.BYTES: "bytes",
-}
+try:
+    from specs.gnmi import gnmi_pb2
+    # gNMI encoding mapper
+    GNMI_ENCODING_TO_STR = {
+        gnmi_pb2.JSON_IETF: "json_ietf",
+        gnmi_pb2.JSON: "json",
+        gnmi_pb2.PROTO: "proto",
+        gnmi_pb2.ASCII: "ascii",
+        gnmi_pb2.BYTES: "bytes",
+    }
+except ImportError:
+    gnmi_pb2 = None
+    GNMI_ENCODING_TO_STR = {}
 
 def str_to_bytes(text: str, encoding: str = "utf-8") -> bytes:
     """

@@ -1,6 +1,7 @@
 import time
 import hashlib
 import logging
+import dataclasses
 
 from util.utils import str_to_bytes
 from managers.factory import ClientFactory, ValidatorFactory
@@ -11,19 +12,33 @@ class BaseUnaryWorker:
     """
     Base class for single request-response workers
     """
-    def __init__(self, target_ip, target_port, username="",
+    def __init__(self, target_ip=None, target_port=None, username="",
                  password="", protocol='gnmi',
-                 security=None, **kwargs):
-        self.target_ip = target_ip
-        self.target_port = target_port
-        self.username = username
-        self.password = password
-        self.security = security
-        self.protocol = protocol.lower()
-        self.kwargs = kwargs
+                 security=None, config=None, **kwargs):
+        self.config = config
+        if config is not None:
+            self.target_ip = config.target_ip
+            self.target_port = config.target_port
+            self.username = config.username
+            self.password = config.password
+            self.protocol = config.protocol.lower() if config.protocol else 'gnmi'
+            self.security = config.security
+            self.kwargs = dataclasses.asdict(config)
+            for k in ['target', 'security', 'username', 'password', 'protocol']:
+                self.kwargs.pop(k, None)
+            self.kwargs.update(kwargs)
+        else:
+            self.target_ip = target_ip
+            self.target_port = target_port
+            self.username = username
+            self.password = password
+            self.protocol = protocol.lower() if protocol else 'gnmi'
+            self.security = security
+            self.kwargs = kwargs
+
         self.target = f'{self.target_ip}:{self.target_port}'
 
-        raw_id_str = f"{target_ip}:{target_port}:{time.time()}"
+        raw_id_str = f"{self.target_ip}:{self.target_port}:{time.time()}"
         self.session_id = hashlib.md5(str_to_bytes(raw_id_str)).hexdigest()[:10]
 
         # validator - TODO
@@ -41,10 +56,13 @@ class BaseUnaryWorker:
 
     def _get_client(self):
         """Asks the factory for a client based on the requested protocol"""
+        client_kwargs = dict(self.kwargs)
+        for k in ['target', 'security', 'username', 'password', 'protocol']:
+            client_kwargs.pop(k, None)
         return ClientFactory.get_client(
             protocol=self.protocol, target=self.target, 
             username=self.username, password=self.password,
-            security=self.security, **self.kwargs
+            security=self.security, **client_kwargs
         )
 
 class CapabilityWorker(BaseUnaryWorker):
@@ -64,10 +82,13 @@ class CapabilityWorker(BaseUnaryWorker):
         return "Capabilities"
 
 class GetWorker(BaseUnaryWorker):
-    def __init__(self, target_ip, target_port, **kwargs):
-        super().__init__(target_ip, target_port, **kwargs)
-        paths = kwargs.get('paths', [])
-        self.paths = paths
+    def __init__(self, target_ip=None, target_port=None, config=None, **kwargs):
+        super().__init__(target_ip=target_ip, target_port=target_port, config=config, **kwargs)
+        if self.config and hasattr(self.config, 'paths'):
+            self.paths = self.config.paths
+        else:
+            paths = kwargs.get('paths', [])
+            self.paths = paths
 
     def start(self):
         logger.debug(f"[Worker(Get) {self.target_ip}] Requesting Get...")
@@ -91,17 +112,22 @@ class GetWorker(BaseUnaryWorker):
         return "Get"
 
 class SetWorker(BaseUnaryWorker):
-    def __init__(self, target_ip, target_port, updates=None, replaces=None, deletes=None, **kwargs):
+    def __init__(self, target_ip=None, target_port=None, updates=None, replaces=None, deletes=None, config=None, **kwargs):
         """
         In SetRequest, it handles three case of requests
         * update -> [('path', 'value'), ...]
         * delete -> ['path', ...]
         * replace -> [('path', 'value'), ...]
         """
-        super().__init__(target_ip, target_port, **kwargs)
-        self.updates = updates or []
-        self.replaces = replaces or []
-        self.deletes = deletes or []
+        super().__init__(target_ip=target_ip, target_port=target_port, config=config, **kwargs)
+        if self.config:
+            self.updates = getattr(self.config, 'updates', None) or updates or []
+            self.replaces = getattr(self.config, 'replaces', None) or replaces or []
+            self.deletes = getattr(self.config, 'deletes', None) or deletes or []
+        else:
+            self.updates = updates or []
+            self.replaces = replaces or []
+            self.deletes = deletes or []
 
     def start(self):
         logger.debug(f"[Worker(Set) {self.target_ip}] Requesting Set...")

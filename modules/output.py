@@ -48,6 +48,11 @@ class OutputHandler:
         raw_data = message.get('data')
         sub_name = message.get('subscription_name', '')
 
+        if isinstance(raw_data, Exception):
+            self.stream.write(f"[Error] RPC '{message.get('rpc')}' on {message.get('target')}: {raw_data}\n")
+            self.stream.flush()
+            return
+
         if self.format in ['json', 'xml']:
             meta = {
                 'source': message.get('target'),

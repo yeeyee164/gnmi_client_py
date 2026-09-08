@@ -1,11 +1,20 @@
+from __future__ import annotations
 import json
 import base64
 import datetime
 from abc import ABC, abstractmethod
 
-from google.protobuf import text_format
+try:
+    from google.protobuf import text_format
+    from specs.gnmi.gnmi_pb2 import GetResponse, SetResponse, CapabilityResponse, SubscribeResponse
+except ImportError:
+    text_format = None
+    GetResponse = None
+    SetResponse = None
+    CapabilityResponse = None
+    SubscribeResponse = None
+
 from modules.path import gnmi_path_to_xpath
-from specs.gnmi.gnmi_pb2 import GetResponse, SetResponse, CapabilityResponse, SubscribeResponse
 from util.utils import GNMI_ENCODING_TO_STR
 
 class ProtocolFormatter(ABC):
@@ -250,9 +259,13 @@ class GNMIFormatter(ProtocolFormatter):
 # NETCONF output formatter(TODO)
 # ========================
 
-import xmltodict
+try:
+    import xmltodict
+    from lxml import etree
+except ImportError:
+    xmltodict = None
+    etree = None
 import xml.dom.minidom
-from lxml import etree
 
 class NETCONFFormatter(ProtocolFormatter):
     """
