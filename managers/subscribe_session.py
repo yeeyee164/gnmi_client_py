@@ -1,7 +1,6 @@
 import time
 import json
 import hashlib
-import grpc
 import queue
 import traceback
 import logging
@@ -96,7 +95,9 @@ class SubscribeSession:
                 for raw_response in response_stream:
                     # Break the loop if the Manager tells this thread to stop
                     if not self.is_running:
-                        response_stream.cancel()
+                        cancel_func = getattr(response_stream, 'cancel', None)
+                        if callable(cancel_func):
+                            cancel_func()
                         break
                         
                     self.data_queue.put({
@@ -107,8 +108,6 @@ class SubscribeSession:
                         'data': raw_response
                     })
                     
-        except grpc.RpcError as e:
-            logger.error(f"[Worker {self.session_id} | {self.target_ip}] gRPC Error '{e.code()}': {e.details()}")
         except Exception as e:
             traceback.print_stack()
             logger.error(f"[Worker {self.session_id} | {self.target_ip}] Error in '{self.subscription_name}': {e}")

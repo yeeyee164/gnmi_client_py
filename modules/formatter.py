@@ -252,73 +252,109 @@ class GNMIFormatter(ProtocolFormatter):
 
 import xmltodict
 import xml.dom.minidom
+from lxml import etree
 
 class NETCONFFormatter(ProtocolFormatter):
     """
-    Custom parser that translates raw NETCONFF XML responses into clean dictionaries
+    Custom parser that translates raw NETCONF XML responses into clean dictionaries
     using xmltodict, matching the standard output style of the framework.
     """
-    def format_json(self, raw_data, **meta):
+    def format_json(self, raw_data, rpc: str = "", meta=None, **kwargs):
         res = {}
         if meta:
             res.update(meta)
+        if kwargs:
+            res.update(kwargs)
 
-        rpc = res.get('rpc')
+        res_rpc = res.get('rpc') or rpc
+        res['rpc'] = res_rpc
+        res['timestamp'] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        res['data'] = None
+        res['error'] = None
 
-        if rpc == 'capability':
+        # Handle Exception / RPCError
+        if isinstance(raw_data, Exception):
+            if hasattr(raw_data, 'xml') and raw_data.xml is not None:
+                try:
+                    if isinstance(raw_data.xml, etree._Element):
+                        xml_str = etree.tostring(raw_data.xml, encoding='unicode')
+                    else:
+                        xml_str = str(raw_data.xml)
+                    parsed_err = xmltodict.parse(xml_str)
+                    res['error'] = parsed_err.get('rpc-error', parsed_err)
+                except Exception as e:
+                    res['error'] = str(raw_data)
+            else:
+                res['error'] = str(raw_data)
+            return res
+
+        if res_rpc == 'capability':
             res['data'] = raw_data
+            return res
 
-        # ncclient returns RPCReply objects
-        xml_node = getattr(raw_data, 'xml', raw_data)
+        if res_rpc == 'get-schema':
+            if hasattr(raw_data, 'data'):
+                res['data'] = raw_data.data
+            else:
+                res['data'] = getattr(raw_data, 'xml', str(raw_data))
+            return res
 
-        # ncclient's RPCError stores the raw XML as an lxml Element
-        if not isinstance(xml_node, str):
-            try:
-                # in response of <hello> message
-                from lxml import etree
-                if isinstance(xml_node, etree._Element):
-                    xml_str = etree.tostring(xml_node, encoding='unicode')
-                else:
-                    xml_str = str(xml_node)
-                parsed = xmltodict.parse(xml_str)
+        # Handle get, get-config, and other XML RPC replies
+        data_xml = getattr(raw_data, 'data_xml', None)
+        xml_str = data_xml if data_xml else getattr(raw_data, 'xml', str(raw_data))
+
+        try:
+            parsed = xmltodict.parse(xml_str)
+            # Extract inner data element if present
+            if 'data' in parsed:
+                res['data'] = parsed['data']
+            elif 'rpc-reply' in parsed and 'data' in parsed['rpc-reply']:
+                res['data'] = parsed['rpc-reply']['data']
+            else:
                 res['data'] = parsed
-            except Exception as e:
-                res['data'] = str(xml_node)
-                res['error'] = f"XML Parsing failed: {e}"
+        except Exception as e:
+            res['data'] = str(xml_str)
+            res['error'] = f"XML Parsing failed: {e}"
 
         return res
 
     def format_text(self, raw_data, **meta):
         """print the output AS-IS presented"""
-        # ncclient returns RPCReply objects
-        xml_node = getattr(raw_data, 'xml', raw_data)
+        if isinstance(raw_data, Exception):
+            return str(raw_data)
 
-        # ncclient's RPCError stores the raw XML as an lxml Element
+        if isinstance(raw_data, list):
+            return "\n".join(str(item) for item in raw_data)
+
+        if hasattr(raw_data, 'data'):
+            return raw_data.data
+
+        xml_node = getattr(raw_data, 'xml', raw_data)
         if not isinstance(xml_node, str):
             try:
-                # in response of <hello> message
-                from lxml import etree
                 if isinstance(xml_node, etree._Element):
                     xml_str = etree.tostring(xml_node, encoding='unicode')
                 else:
                     xml_str = str(xml_node)
             except Exception:
                 xml_str = str(xml_node)
-        
+        else:
+            xml_str = xml_node
+
         return xml_str
 
     def format_xml(self, raw_data, **meta):
         """Uses minidom to return beautify indented XML."""
-        rpc = meta.get('rpc')
+        rpc = meta.get('rpc', '')
 
         # in response of <hello> message
         if rpc == 'capability':
-            return raw_data
+            return "\n".join(str(c) for c in raw_data) if isinstance(raw_data, list) else str(raw_data)
 
         xml_str = getattr(raw_data, 'xml', str(raw_data))
 
         try:
             dom = xml.dom.minidom.parseString(xml_str)
-            return dom.toprettyxml(indend='  ')
+            return dom.toprettyxml(indent='  ')
         except Exception:
             return xml_str

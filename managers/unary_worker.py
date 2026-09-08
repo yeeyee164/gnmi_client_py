@@ -1,6 +1,5 @@
 import time
 import hashlib
-import grpc
 import logging
 
 from util.utils import str_to_bytes
@@ -57,9 +56,9 @@ class CapabilityWorker(BaseUnaryWorker):
                 result = client.capability(**self.kwargs)
                 return self._format_result("capability", result)
                 
-        except grpc.RpcError as e:
-            logger.error(f'[Worker(Capability) {self.target_ip}] gRPC error: {e.code()} - {e.details()}')
-            return None
+        except Exception as e:
+            logger.error(f'[Worker(Capability) {self.target_ip}] Error: {e}')
+            return self._format_result("capability", e)
 
     def __str__(self):
         return "Capabilities"
@@ -84,9 +83,9 @@ class GetWorker(BaseUnaryWorker):
                 result = client.get(**self.kwargs)
                 return self._format_result("get", result)
                 
-        except grpc.RpcError as e:
-            logger.error(f'[Worker(Get) {self.target_ip}] gRPC error: {e.code()} - {e.details()}')
-            return None
+        except Exception as e:
+            logger.error(f'[Worker(Get) {self.target_ip}] Error: {e}')
+            return self._format_result("get", e)
 
     def __str__(self):
         return "Get"
@@ -116,9 +115,9 @@ class SetWorker(BaseUnaryWorker):
             with self._get_client() as client:
                 result = client.set(**self.kwargs)
                 return self._format_result("Set", result)
-        except grpc.RpcError as e:
-            logger.error(f"[Worker(Set) {self.target_ip}] gRPC Error: {e.code()} - {e.details()}")
-            return None
+        except Exception as e:
+            logger.error(f"[Worker(Set) {self.target_ip}] Error: {e}")
+            return self._format_result("Set", e)
 
     def __str__(self):
         return "Set"

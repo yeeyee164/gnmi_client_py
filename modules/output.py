@@ -64,6 +64,7 @@ class OutputHandler:
                 output_str = json.dumps(formatted_data, indent=2)
             elif self.format == 'xml':
                 formatted_data = self.formatter.format_xml(raw_data, rpc=rpc, meta=meta)
+                output_str = formatted_data
         elif self.format == 'text':
             formatted_data = self.formatter.format_text(raw_data)
             output_str = f"\n--- [target: {message.get('target')}] ---\n{formatted_data}"

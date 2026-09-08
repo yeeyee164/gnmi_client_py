@@ -1,3 +1,4 @@
+import os
 import grpc
 import logging
 from typing import Iterator, Any, Optional
@@ -320,7 +321,9 @@ class NetconfClient(BaseClient):
         """
         try:
             # path(XPath)
-            paths = kwargs.get('path', [])
+            paths = kwargs.get('nc_xpath') or kwargs.get('path') or kwargs.get('paths') or []
+            if isinstance(paths, str):
+                paths = [paths]
 
             op = kwargs.get('operation', 'get').lower()
 
@@ -334,7 +337,7 @@ class NetconfClient(BaseClient):
                     raise ValueError("An Identifier (YANG module name) is required for <get-schema>")
 
                 version = kwargs.get('version', "")
-                fmt = kwargs.get('format', 'yang')
+                fmt = kwargs.get('schema_format') or kwargs.get('format', 'yang')
 
                 return self.session.get_schema(identifier=ident, version=version, format=fmt)
 
@@ -346,20 +349,40 @@ class NetconfClient(BaseClient):
             source = kwargs.get('source', '')
 
             # filter(XML)
-            filter = kwargs.get('filter', '')
+            raw_filter = kwargs.get('filter', '')
+            filter_xml = ""
 
-            if len(paths) == 0:
-                filter_xml = filter
-            else:
+            # Check if filter is a file path
+            if raw_filter and os.path.isfile(raw_filter):
+                try:
+                    with open(raw_filter, 'r', encoding='utf-8') as f:
+                        raw_filter = f.read().strip()
+                except Exception as e:
+                    logger.warning(f"[NetconfClient] Failed to read filter file '{raw_filter}': {e}")
+
+            if raw_filter:
+                stripped = raw_filter.strip()
+                if stripped.startswith('<'):
+                    if stripped.startswith('<filter'):
+                        filter_xml = stripped
+                    else:
+                        filter_xml = f'<filter type="subtree">{stripped}</filter>'
+                else:
+                    filter_xml = f'<filter type="xpath" select="{stripped}"/>'
+            elif paths:
                 # Combine multiple XPath requests using the union '|' operator
                 xpath_filter = " | ".join(paths)
                 filter_xml = f"""<filter type="xpath" select="{xpath_filter}"/>"""
+
+            if 'type="xpath"' in filter_xml:
+                if not any(':xpath' in cap for cap in self.session.server_capabilities):
+                    logger.warning("[NetconfClient] Server does not advertise :xpath capability. Request may fail.")
 
             # ==========================================
             # 3. Execute <get> or <get-config>
             # ==========================================
 
-            print(f"Operation: {op}, source: {source}")
+            logger.debug(f"[NetconfClient] Operation: {op}, source: {source}")
 
             # <get-config>
             if op == 'get-config':
