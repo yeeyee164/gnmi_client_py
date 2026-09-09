@@ -13,14 +13,9 @@ class OutputHandler:
     * 'data': base64 formatted response result
     * 'protocol': which protocol used for response
     * 'rpc': supported RPC for 'protocol'
+    * 'format': output format
 
-    For now, it only supports standard output or file.
-
-    Supported formats:
-    ------------------
-    
-    **gNMI**
-        * json, json_ietf, ascii
+    NOTE: It's not the encoding rule defined at protocol.
     """
 
     def __init__(self, name, config):
@@ -51,21 +46,33 @@ class OutputHandler:
     def write(self, message):
         """Formats and writes the message to the defined stream"""
         raw_data = message.get('data')
+        sub_name = message.get('subscription_name', '')
 
-        if self.format in ['json', 'json_ietf']:
+        if isinstance(raw_data, Exception):
+            self.stream.write(f"[Error] RPC '{message.get('rpc')}' on {message.get('target')}: {raw_data}\n")
+            self.stream.flush()
+            return
+
+        if self.format in ['json', 'xml']:
             meta = {
                 'source': message.get('target'),
-                'subscription-name': message.get('subscription_name'),
             }
+
+            if sub_name != '':
+                meta['subscription_name'] = sub_name
+
             rpc = message.get('rpc')
             meta = {k: v for k, v in meta.items() if v is not None}
 
-            formatted_data = self.formatter.format_json(raw_data, rpc=rpc, meta=meta)
-
-            output_str = json.dumps(formatted_data, indent=2)
-        elif self.format == 'ascii':
-            formatted_data = self.formatter.format_ascii(raw_data)
-            output_str = f"\n--- [{message.get('target')}] ---\n{formatted_data}"
+            if self.format == 'json':
+                formatted_data = self.formatter.format_json(raw_data, rpc=rpc, meta=meta)
+                output_str = json.dumps(formatted_data, indent=2)
+            elif self.format == 'xml':
+                formatted_data = self.formatter.format_xml(raw_data, rpc=rpc, meta=meta)
+                output_str = formatted_data
+        elif self.format == 'text':
+            formatted_data = self.formatter.format_text(raw_data)
+            output_str = f"\n--- [target: {message.get('target')}] ---\n{formatted_data}"
         else:
             output_str = str(message)
 

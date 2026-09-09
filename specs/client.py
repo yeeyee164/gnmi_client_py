@@ -1,14 +1,24 @@
-import grpc
+from __future__ import annotations
+import os
+try:
+    import grpc
+    from specs.gnmi import gnmi_pb2, gnmi_pb2_grpc
+except ImportError:
+    grpc = None
+    gnmi_pb2 = None
+    gnmi_pb2_grpc = None
+
+import logging
 from typing import Iterator, Any, Optional
 from abc import ABC, abstractmethod
 
-# Assuming you generated these using grpc_tools.protoc
-from specs.gnmi import gnmi_pb2, gnmi_pb2_grpc
 from modules.path import parse_path
-from modules.security import TLSProfile
+from modules.security import SecurityModule
 
 #define some global variables
 NANOSECOND = 1000000000
+
+logger = logging.getLogger(__name__)
 
 class BaseClient(ABC):
     """
@@ -30,11 +40,11 @@ class BaseClient(ABC):
         pass
 
     @abstractmethod
-    def capability(self) -> Any:
+    def capability(self, **kwargs) -> Any:
         pass
 
     @abstractmethod
-    def get(self, paths: list, prefix: str = "", **kwargs) -> Any:
+    def get(self, **kwargs) -> Any:
         """
         Executes a read/fetch operation
         Mapped to gNMI Get, NETCONF <get>/<get-config>, or RESTCONF GET
@@ -42,7 +52,7 @@ class BaseClient(ABC):
         pass
 
     @abstractmethod
-    def set(self, prefix: str="", updates: list=None, deletes: list=None, replaces: list=None, **kwargs) -> Any:
+    def set(self, **kwargs) -> Any:
         """
         Executes a write/edit operation
         Mapped to gNMI Set, NETCONF <edit-config> or RESTCONF PUT/POST/DELETE
@@ -70,6 +80,7 @@ class GNMIClient(BaseClient):
             target: str,
             username: str = "",
             password: str = "",
+            security_module=None,
             **kwargs,
         ):
         self.target = target
@@ -83,7 +94,7 @@ class GNMIClient(BaseClient):
 
         # Configure from keyward arguments
         self.insecure = kwargs.get('insecure', False)
-        self.security = kwargs.get('security', None)
+        self.security_module = security_module
         self.encoding = kwargs.get('encoding', "json_ietf")
         self.debug = kwargs.get('debug', False)
 
@@ -104,11 +115,10 @@ class GNMIClient(BaseClient):
 
         if self.insecure:
             self.channel = grpc.insecure_channel(self.target)
-        elif self.security is not None:
+        elif self.security_module is not None:
             # create a TLS-based secure communication
-            tls_profile = TLSProfile(profile=self.security)
-            creds = tls_profile.get_grpc_credentials()
-            options = tls_profile.get_grpc_options()
+            creds = self.security_module.get_grpc_credentials()
+            options = self.security_module.get_grpc_options()
 
             # set additional options
             self.channel = grpc.secure_channel(self.target, creds, options=options)
@@ -123,7 +133,7 @@ class GNMIClient(BaseClient):
         if self.channel:
             self.channel.close()
 
-    def capability(self) -> gnmi_pb2.CapabilityResponse:
+    def capability(self, **kwargs) -> gnmi_pb2.CapabilityResponse:
         """ Executes an Unary Capabilities RPC """
         request = gnmi_pb2.CapabilityRequest()
         
@@ -131,10 +141,22 @@ class GNMIClient(BaseClient):
         response = self.stub.Capabilities(request, metadata=self.metadata)
         return response
 
-    def get(self, paths: list, prefix=None, **kwargs) -> gnmi_pb2.GetResponse:
+    def get(self, **kwargs) -> gnmi_pb2.GetResponse:
         """ Executes an Unary Get RPC """
+        prefix = kwargs.get('prefix', "")
+        paths = kwargs.get('paths', [])
+        type = kwargs.get('type', '')
+
+        get_type = {
+            'state': gnmi_pb2.GetRequest.STATE,
+            'config': gnmi_pb2.GetRequest.CONFIG,
+            'operational': gnmi_pb2.GetRequest.OPERATIONAL,
+            '': gnmi_pb2.GetRequest.ALL,
+        }
+
         request = gnmi_pb2.GetRequest(
-            encoding=self.encoding_map[self.encoding]
+            encoding=self.encoding_map[self.encoding],
+            type=get_type[type]
         )
         
         if prefix:
@@ -229,7 +251,7 @@ class GNMIClient(BaseClient):
                         poll_req.poll.SetInParent()
                         yield poll_req
             except Exception as e:
-                print(f"[Client error] Exception in pb_generator: {e}")
+                logger.error(f"[Client] Exception in pb_generator: {e}")
                 if self.debug:
                     import traceback
                     traceback.print_exc()
@@ -237,3 +259,175 @@ class GNMIClient(BaseClient):
 
         # The stub returns an iterator that continuously yields SubscribeResponses as they arrive
         return self.stub.Subscribe(pb_generator(), metadata=self.metadata)
+
+try:
+    from ncclient import manager, operations
+except ImportError:
+    manager = None
+    operations = None
+class NetconfClient(BaseClient):
+    """
+    A "Lite" NETCONF Client utilizing ncclient.
+    Currently accepts raw XPath strings for its paths.
+    Future versions will utilize libyang to translate standard paths to XML Subtrees.
+    """
+    def __init__(self, target: str, username: str = "", password: str = "",
+                 security_module=None, **kwargs):
+        self.target = target
+        self.username = username
+        self.password = password
+        self.security_module = security_module
+        self.session = None
+
+        self.device = kwargs.get('device', 'default')
+
+    def __enter__(self):
+        host, port = self.target.split(':')
+        
+        # Default SSH connection kwargs
+        netconf_info = {
+            'host': host,
+            'port': int(port),
+            'username': self.username,
+            'password': self.password,
+            'device_params': {"name": self.device},
+            'hostkey_verify': False  # Allow unknown SSH host keys for testing
+        }
+
+        # Inject SSH Keys from the Security Module if provided
+        if self.security_module:
+            ssh_kwargs = self.security_module.get_ssh_kwargs()
+            if ssh_kwargs:
+                netconf_info.update(ssh_kwargs)
+
+        # create a session
+        self.session = manager.connect(**netconf_info)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.session:
+            try:
+                if self.session.connected:
+                    self.session.close_session()
+            except Exception:
+                # Suppress teardown exceptions so they don't override and destroy
+                # the successful RPC data returned inside the 'with' block
+                pass
+            
+
+    def capability(self, **kwargs) -> Any:
+        """NETCONF exchanges <hello> when the session has established"""
+        return list(self.session.server_capabilities)
+
+    def get(self, **kwargs) -> Any:
+        """
+        Executes a NETCONF <get>, <get-config>, <get-schema>.
+        In this 'lite' version, we assume `paths` is a list of raw XPath strings.
+        We combine them into an XPath union filter.
+
+        It should pass one of arguments
+            - path: list of XPaths
+            - filter: XML formatted string
+        """
+        try:
+            # path(XPath)
+            paths = kwargs.get('nc_xpath') or kwargs.get('path') or kwargs.get('paths') or []
+            if isinstance(paths, str):
+                paths = [paths]
+
+            op = kwargs.get('operation', 'get').lower()
+
+            # ==========================================
+            # 1. Schema Discovery (<get-schema>)
+            # ==========================================
+            identifier = kwargs.get('identifier')
+            if op == 'get-schema' or identifier:
+                ident = identifier or (paths[0] if paths else None)
+                if not ident:
+                    raise ValueError("An Identifier (YANG module name) is required for <get-schema>")
+
+                version = kwargs.get('version', "")
+                fmt = kwargs.get('schema_format') or kwargs.get('format', 'yang')
+
+                return self.session.get_schema(identifier=ident, version=version, format=fmt)
+
+            # ==========================================
+            # 2. Build XML Filter (File / String / XPath)
+            # ==========================================
+
+            # source
+            source = kwargs.get('source', '')
+
+            # filter(XML)
+            raw_filter = kwargs.get('filter', '')
+            filter_xml = ""
+
+            # Check if filter is a file path
+            if raw_filter and os.path.isfile(raw_filter):
+                try:
+                    with open(raw_filter, 'r', encoding='utf-8') as f:
+                        raw_filter = f.read().strip()
+                except Exception as e:
+                    logger.warning(f"[NetconfClient] Failed to read filter file '{raw_filter}': {e}")
+
+            if raw_filter:
+                stripped = raw_filter.strip()
+                if stripped.startswith('<'):
+                    if stripped.startswith('<filter'):
+                        filter_xml = stripped
+                    else:
+                        filter_xml = f'<filter type="subtree">{stripped}</filter>'
+                else:
+                    filter_xml = f'<filter type="xpath" select="{stripped}"/>'
+            elif paths:
+                # Combine multiple XPath requests using the union '|' operator
+                xpath_filter = " | ".join(paths)
+                filter_xml = f"""<filter type="xpath" select="{xpath_filter}"/>"""
+
+            if 'type="xpath"' in filter_xml:
+                if not any(':xpath' in cap for cap in self.session.server_capabilities):
+                    logger.warning("[NetconfClient] Server does not advertise :xpath capability. Request may fail.")
+
+            # ==========================================
+            # 3. Execute <get> or <get-config>
+            # ==========================================
+
+            logger.debug(f"[NetconfClient] Operation: {op}, source: {source}")
+
+            # <get-config>
+            if op == 'get-config':
+                src = source if source else 'running'
+                if filter_xml:
+                    return self.session.get_config(source=src, filter=filter_xml)
+                else:
+                    return self.session.get_config(source=src)
+            else: # <get>
+                if filter_xml:
+                    return self.session.get(filter=filter_xml)
+                else: return self.session.get()
+        except operations.RPCError as e:
+            # Catch the ncclient RPCError so it doesn't crash the worker thread.
+            # And it present <rpc-error> as a result of <rpc>.
+            return e
+
+    def set(self, **kwargs) -> Any:
+        """
+        Executes a NETCONF <edit-config>.
+        A 'lite' implementation requires raw XML strings from the user.
+        (Will be replaced by libyang automated payload generation later).
+        """
+        # Placeholder for lite implementation. 
+        # Advanced edit-config requires strict XML namespacing.
+        raise NotImplementedError("NETCONF Set/Edit-Config is awaiting libyang integration.")
+
+    def subscribe(self, request_iterator: Any) -> Iterator[Any]:
+        """
+        Executes NETCONF Event Notifications (RFC 5277).
+        """
+        self.session.create_subscription()
+        
+        # Generator pattern yielding notifications as they arrive
+        while True:
+            notif = self.session.take_notification(block=True)
+            if notif:
+                yield notif

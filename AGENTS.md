@@ -1,65 +1,89 @@
-# AGENTS.md — Repository Agent Instructions
+# **Context & Task Brief for Antigravity Agent: Multi-Protocol Network Automation Client**
 
-Purpose: Concise, link-first guidance to help AI agents be productive in this repository.
+## Active Context & Directives
+- **Core architecture and data flow:** [`core_architecture_and_data_flow.md`](.agents/custom/core_architecture_and_data_flow.md)
+- **NETCONF client milestone:** [`milestone_netconf.md`](.agents/custom/milestone_netconf.md)
+- **Coding & Protocol Rules:** [`RULES.md`](.agents/rules/RULES.md)
 
-Key entrypoints
-- `gnmi_main.py`: CLI entrypoint; builds config via `ui/cmd.py` and dispatches work to managers.
-- `ui/cmd.py`: CLI and YAML parsing; produces `ParsedConfig`/`SessionConfig` used by managers.
-- `managers/manager.py` & `managers/gnmi_manager.py`: Manager factory and orchestrators for subscribe/unary flows.
-- `managers/gnmi_subscribe_session.py` / `managers/gnmi_unary_worker.py`: Per-target workers for streaming and unary RPCs.
-- `specs/client.py`: `GNMIClient` gRPC wrapper used by workers.
+## **1\. Project Background & System Identity**
 
-Run & test (concise examples)
-- Run CLI (examples):
-```bash
-python3 gnmi_main.py --target 10.0.0.1:57400 capabilities
-python3 gnmi_main.py --config request_exp_named_sub.yaml
-python3 gnmi_main.py --target 10.0.0.1:57400 subscribe --mode once --path '/interfaces/interface'
+You are acting as a **Senior Network Automation Software Architect and Principal Core Maintainer** working on the gnmi\_client\_py repository.
+
+### **Mission Statement**
+
+This project is an enterprise-grade, protocol-agnostic Northbound (NB) network automation engine written in Python 3\. It interfaces with multi-vendor network operating systems (Cisco IOS-XE/XR, Juniper Junos, Arista EOS, Nokia SR OS) using standardized YANG-based management protocols:
+
+1. **gNMI** (gRPC Network Management Interface via grpcio and Protobuf stubs in specs/gnmi/).  
+2. **NETCONF** (RFC 6241, RFC 5277, RFC 6022 via ncclient over SSH/TLS).  
+3. *(Planned)* **RESTCONF** (RFC 8040 via requests / HTTPS).
+
+The engine supports dual execution paradigms:
+
+* **Nested CLI Subparsers:** client\_main.py \<protocol\> \<operation\> \[options\]  
+* **Hierarchical YAML Configuration:** client\_main.py \-c config.yaml (supporting multi-target, multi-subscription, and multi-operation orchestration).
+
+## **2\. Directory Layout**
+
+Familiarize yourself with the workspace layout before making any modifications:
+
+### 2.1 Directory Layout
+
+```text
+.  
+├── client\_main.py                \# Universal CLI entrypoint and orchestrator launcher  
+├── ui/  
+│   ├── \_\_init\_\_.py  
+│   └── cmd.py                    \# Nested CLI subparsers & YAML parser (outputs SessionConfig instances)  
+├── managers/  
+│   ├── \_\_init\_\_.py  
+│   ├── manager.py                \# ManagerFactory, UnaryManager (ThreadPool), SubscriptionManager (Streaming)  
+│   ├── factory.py                \# ClientFactory (instantiates BaseClient implementations)  
+│   ├── unary\_worker.py           \# Universal Unary Workers (GetWorker, SetWorker, CapabilitiesWorker)  
+│   └── subscribe\_session.py      \# Universal streaming/poll session worker thread  
+├── specs/  
+│   ├── \_\_init\_\_.py  
+│   ├── base\_client.py            \# BaseClient ABC (\_\_enter\_\_, \_\_exit\_\_, get, set, subscribe, capabilities)  
+│   ├── client.py                 \# GNMIClient (implements BaseClient using grpcio)  
+│   ├── netconf\_client.py         \# NetconfClient (implements BaseClient using ncclient)  
+│   ├── base\_validator.py         \# BaseValidator ABC for offline syntax/semantic checks  
+│   ├── gnmi\_validator.py         \# GNMI path validation (wildcard checks, OpenConfig syntax)  
+│   └── netconf\_rpc\_design.md     \# Detailed architectural mapping for NETCONF RPCs  
+├── modules/  
+│   ├── \_\_init\_\_.py  
+│   ├── security.py               \# SecurityProfile dataclass & TLSProfile (x509, SSH keys, SAN overrides)  
+│   ├── formatter.py              \# ProtocolFormatter, GNMIFormatter, NETCONFFormatter (xmltodict, minidom)  
+│   ├── output.py                 \# OutputHandler (routes structured telemetry to stdout, stderr, or files)  
+│   ├── logger.py                 \# Centralized logging module (Console, Syslog RFC 5424, file logging)  
+│   ├── path.py                   \# Path parsing utilities  
+│   └── validate.py               \# ValidatorFactory  
+└── util/  
+    ├── \_\_init\_\_.py  
+    ├── utils.py                  \# IP address validation and string sanitation  
+    └── encoding.py               \# String/bytes encoding utilities  
 ```
-- Run unit tests:
+
+## 3. Project Initialization and Environment Setup
+
+Before executing tasks, verify the virtual environment and required dependencies:
+
+### Prerequisites & Dependencies
+* Python 3.9+ (Python 3.10+ recommended)
+* System C-libraries for SSH and XML manipulation (libxml2-dev, libxslt1-dev, libffi-dev)
+
+### Setup commands
+
 ```bash
-pytest -q
+# 1. activate virtual environment(optional)
+py310venv
+
+# 2. Upgrade core tooling
+pip install --upgrade pip setuptools wheel
+
+# 3. Install Python dependencies
+pip install grpcio grpcio-tools ncclient xmltodict pyyaml lxml
+
+# 4. Verify CLI entrypoint
+python client_main.py --help
+python client_main.py gnmi --help
+python client_main.py netconf --help
 ```
-- Install minimal deps (if missing):
-```bash
-pip install grpcio pyyaml pytest
-```
-
-Important directories
-- `managers/`: orchestration and worker logic. See [managers/gnmi_manager.py](managers/gnmi_manager.py).
-- `modules/`: path parsing, validation, and formatting. See [modules/path.py](modules/path.py) and [modules/validate.py](modules/validate.py).
-- `ui/`: CLI parsing and config normalization. See [ui/cmd.py](ui/cmd.py).
-- `specs/gnmi/`: pre-generated proto bindings used by the client; do not re-generate without instruction.
-
-Conventions & notes for agents
-- Link-first: reference files rather than embedding large blocks of code or docs.
-- Minimal changes: prefer small, well-scoped edits that preserve existing behaviors.
-- Protos: the repo includes generated protos in `specs/gnmi/`; avoid regenerating or modifying them unless requested.
-- YAML is authoritative for request shape: preserve compatibility when changing `ui/cmd.py`.
-- Path parsing is subtle: update `modules/path_test.py` when changing `modules/path.py`.
-
-Files to reference when working
-- [README.md](README.md)
-- [gnmi_main.py](gnmi_main.py)
-- [ui/cmd.py](ui/cmd.py)
-- [managers/manager.py](managers/manager.py)
-- [managers/gnmi_manager.py](managers/gnmi_manager.py)
-- [managers/gnmi_subscribe_session.py](managers/gnmi_subscribe_session.py)
-- [managers/gnmi_unary_worker.py](managers/gnmi_unary_worker.py)
-- [modules/path.py](modules/path.py)
-- [modules/validate.py](modules/validate.py)
-- [modules/path_test.py](modules/path_test.py)
-- [specs/gnmi/gnmi_pb2.py](specs/gnmi/gnmi_pb2.py)
-- [specs/gnmi/gnmi_pb2_grpc.py](specs/gnmi/gnmi_pb2_grpc.py)
-- [request_exp.yaml](request_exp.yaml)
-- [request_exp_named_sub.yaml](request_exp_named_sub.yaml)
-
-How to use this instruction
-- Start here when exploring the repository. Follow the linked files for implementation details and tests.
-
-Next steps I can do
-- Add a focused `instructions.md` for contributor workflows (testing, linting, examples).
-- Create a small `AGENT` skill to run `pytest -q` and validate CLI invocations automatically.
-
-Feedback
-- Tell me which next step you'd like: expand testing instructions, add CI guidance, or create a copilot-instructions file.

@@ -14,7 +14,11 @@ All of functions related gNMI are referenced at https://github.com/openconfig/gn
 
 import re
 from typing import List, Optional, Dict, Tuple
-from specs.gnmi.gnmi_pb2 import Path, PathElem
+try:
+    from specs.gnmi.gnmi_pb2 import Path, PathElem
+except ImportError:
+    Path = None
+    PathElem = None
 
 # Custom Exceptions to match Go errors
 class MalformedXPathError(Exception): pass
