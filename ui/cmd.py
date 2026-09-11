@@ -388,6 +388,7 @@ class FileConfigBuilder(ConfigBuilder):
                         sub_mode=sub_mode,
                         sample_interval=sample_interval
                     )
+                    sessions.append(session)
             elif len(t_get_list): # Get
                 paths = t_get_list
                 if isinstance(paths, str):
@@ -408,6 +409,7 @@ class FileConfigBuilder(ConfigBuilder):
                     security=global_security,
                     # Get options
                 )
+                sessions.append(session)
                 
             else: # Set
                 updates = t_update_list
@@ -437,8 +439,7 @@ class FileConfigBuilder(ConfigBuilder):
                     replaces=replaces,
                     deletes=deletes,
                 )
-
-            sessions.append(session)
+                sessions.append(session)
 
         return ParsedConfig(
             sessions=sessions, targets=targets,
