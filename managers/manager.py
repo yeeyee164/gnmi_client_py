@@ -198,7 +198,7 @@ class UnaryManager(BaseRPCManager):
             return GetWorker(config=sc)
         elif op in ['set', 'edit-config']:
             return SetWorker(config=sc)
-        elif op == 'capability':
+        elif op in ['capability', 'capabilities']:
             return CapabilityWorker(config=sc)
         else:
             raise ValueError(f"Unsupported unary operation: {op}")
@@ -241,7 +241,7 @@ class ManagerFactory:
     requested RPC.
     """
 
-    UNARY_OPS = {'get', 'get-config', 'get-schema', 'set', 'edit-config', 'capability'}
+    UNARY_OPS = {'get', 'get-config', 'get-schema', 'set', 'edit-config', 'capability', 'capabilities'}
     STREAM_OPS = {'subscribe', 'stream', 'once', 'poll'}
 
     @staticmethod

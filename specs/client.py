@@ -145,7 +145,9 @@ class GNMIClient(BaseClient):
         """ Executes an Unary Get RPC """
         prefix = kwargs.get('prefix', "")
         paths = kwargs.get('paths', [])
-        type = kwargs.get('type', '')
+        type_arg = kwargs.get('type') or kwargs.get('data_type') or ''
+        if isinstance(type_arg, str) and type_arg.lower() == 'all':
+            type_arg = ''
 
         get_type = {
             'state': gnmi_pb2.GetRequest.STATE,
@@ -156,7 +158,7 @@ class GNMIClient(BaseClient):
 
         request = gnmi_pb2.GetRequest(
             encoding=self.encoding_map[self.encoding],
-            type=get_type[type]
+            type=get_type.get(type_arg.lower() if isinstance(type_arg, str) else '', gnmi_pb2.GetRequest.ALL)
         )
         
         if prefix:
@@ -223,7 +225,7 @@ class GNMIClient(BaseClient):
             sub.path.CopyFrom(parse_path(path_obj))
 
             if mode == 'stream':
-                smode = config.get('sub_mode', 'sample').lower()
+                smode = str(config.get('sub_mode') or config.get('stream_mode') or 'sample').lower()
                 if smode == 'sample':
                     sub.mode = gnmi_pb2.SubscriptionMode.SAMPLE
                     sub.sample_interval = config.get('sample_interval', 0) * NANOSECOND

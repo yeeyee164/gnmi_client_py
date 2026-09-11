@@ -12,8 +12,8 @@
 import argparse
 import json
 import time
-from dataclasses import dataclass, field
-from typing import List, Optional, Dict
+from dataclasses import dataclass, field, fields
+from typing import List, Optional, Dict, Tuple, Type
 from abc import ABC, abstractmethod
 
 from modules.security import SecurityProfile
@@ -23,20 +23,20 @@ class FileConfigError(Exception):
     """Custom exception raised when given config vlolates some criteria"""
     pass
 
-@dataclass
+@dataclass(kw_only=True)
 class BaseSessionConfig:
     """
     Universal connection details shared across all protocols
     """
 
     target: str = ""
-    subscription_name: str = "default"
+    protocol: str = ""
     username: str = ""
     password: str = ""
-    times: int = 1
-    operation: str = ""
-    protocol: str = "gnmi"
     security: SecurityProfile = field(default_factory=SecurityProfile)
+    operation: str = ""
+    insecure: bool = False
+    times: int = 1
 
     @property
     def target_ip(self) -> str:
@@ -75,82 +75,205 @@ class BaseSessionConfig:
         return 0
 
 
-@dataclass
-class GNMISessionConfig(BaseSessionConfig):
-    """
-    GNMI-specific payload parameters
+# =====================================================================
+# Abstract Intermediate Dataclasses
+# =====================================================================
 
-    fields
-    ------
-    - `target`: a string value which formatted as "IP:PORT"
-    - `subscription_name`: name of subscription. Only for subscribe-like RPCs.
-    - `username`, `password`: account information
-    - `times`: duplicates this session. Only for testing.
-    - `operation`: 
-    - `protocol`: 
-    - `security`: security parameters for `protocol`
+@dataclass(kw_only=True)
+class BaseCapabilitiesConfig(BaseSessionConfig):
+    """Abstract base for capabilities / hello RPCs."""
+    pass
 
-    """
 
+@dataclass(kw_only=True)
+class BaseGetConfig(BaseSessionConfig):
+    """Abstract base for retrieving operational state or configuration."""
+    pass
+
+
+@dataclass(kw_only=True)
+class BaseSetConfig(BaseSessionConfig):
+    """Abstract base for mutating or editing configuration."""
+    pass
+
+
+@dataclass(kw_only=True)
+class BaseSubscribeConfig(BaseSessionConfig):
+    """Abstract base for streaming telemetry or event notifications."""
+    subscription_name: str = "default"
+
+
+# =====================================================================
+# Concrete gNMI Dataclasses
+# =====================================================================
+
+@dataclass(kw_only=True)
+class GNMICapabilitiesConfig(BaseCapabilitiesConfig):
+    protocol: str = "gnmi"
+    operation: str = "capability"
+
+
+@dataclass(kw_only=True)
+class GNMIGetConfig(BaseGetConfig):
+    protocol: str = "gnmi"
+    operation: str = "get"
     paths: List[str] = field(default_factory=list)
-    mode: str = ""
     prefix: str = ""
     encoding: str = "json_ietf"
-    insecure: bool = False
+    type: str = ""
+    data_type: str = "all"
+
+    def __post_init__(self):
+        if self.type and not self.data_type:
+            self.data_type = self.type
+        elif self.data_type and not self.type:
+            self.type = self.data_type
+
+
+@dataclass(kw_only=True)
+class GNMISetConfig(BaseSetConfig):
+    protocol: str = "gnmi"
+    operation: str = "set"
+    updates: List[Tuple[str, str]] = field(default_factory=list)
+    replaces: List[Tuple[str, str]] = field(default_factory=list)
+    deletes: List[str] = field(default_factory=list)
+    prefix: str = ""
+
+
+@dataclass(kw_only=True)
+class GNMISubscribeConfig(BaseSubscribeConfig):
+    protocol: str = "gnmi"
+    operation: str = "subscribe"
+    paths: List[str] = field(default_factory=list)
+    prefix: str = ""
+    mode: str = "stream"            # stream, once, poll
+    stream_mode: str = "sample"     # sample, on_change, target_defined
+    sub_mode: Optional[str] = None
+    sample_interval: int = 0        # seconds
+    heartbeat_interval: int = 0
+    suppress_redundant: bool = False
+    encoding: str = "json_ietf"
+    updates_only: bool = False
     update_only: bool = False
 
-    # Get specific attributes
-    get_type: str = ""
+    def __post_init__(self):
+        if self.sub_mode and not self.stream_mode:
+            self.stream_mode = self.sub_mode
+        elif self.stream_mode and not self.sub_mode:
+            self.sub_mode = self.stream_mode
+        if self.update_only and not self.updates_only:
+            self.updates_only = self.update_only
+        elif self.updates_only and not self.update_only:
+            self.update_only = self.updates_only
 
-    # STREAM specific attributes
-    sub_mode: Optional[str] = None
-    sample_interval: int = 0
 
-    # Set specific attributes
+# =====================================================================
+# Concrete NETCONF Dataclasses
+# =====================================================================
 
-    # list of ('path', 'value')
-    updates: list = field(default_factory=list)
-    replaces: list = field(default_factory=list)
-    # list of ('path')
-    deletes: list = field(default_factory=list)
-
-    #TODO: may be we need to separate them per type of RPC...
-
-@dataclass
-class NetconfSessionConfig(BaseSessionConfig):
-    """
-    NETCONF-specific payload parameters
-
-    fields
-    ------
-    - `target`: a string value which formatted as "IP:PORT"
-    - `subscription_name`: name of subscription. Only for subscribe-like RPCs.
-    - `username`, `password`: account information
-    - `times`: duplicates this session. Only for testing.
-    - `operation`: 
-    - `protocol`: 
-    - `security`: security parameters for `protocol`
-    - source: data source of NETCONF target. one of <running>, <candidate>, <startup>(get-config), or empty value(get)
-    - target_datastore: datastore for NETCONF.
-    - filter: request subfilter formatted XML
-    - config: request <rpc> for <config>
-    """
-
+@dataclass(kw_only=True)
+class NetconfCapabilitiesConfig(BaseCapabilitiesConfig):
+    protocol: str = "netconf"
+    operation: str = "capability"
     device: str = "default"
 
-    # <get>, <get-config>
-    nc_xpath: List[str] = field(default_factory=list)
+
+@dataclass(kw_only=True)
+class NetconfGetConfig(BaseGetConfig):
+    protocol: str = "netconf"
+    operation: str = "get"
     source: str = "running"
+    filter: Optional[str] = None
+    nc_xpath: List[str] = field(default_factory=list)
+    identifier: Optional[str] = None
+    version: Optional[str] = None
+    schema_format: str = "yang"
+    with_defaults: Optional[str] = None
+    device: str = "default"
+
+
+@dataclass(kw_only=True)
+class NetconfEditConfig(BaseSetConfig):
+    protocol: str = "netconf"
+    operation: str = "edit-config"
     target_datastore: str = "candidate"
-    filter: str = ""
-    config: str = ""
+    config: Optional[str] = None
+    default_operation: str = "merge"
+    test_option: Optional[str] = None
+    error_option: str = "stop-on-error"
+    device: str = "default"
 
-    # <get-schema>
-    identifier: str = ''
-    version: str = ''
-    schema_format: str = 'yang'
 
-    #TODO: may be we need to separate them per type of RPC...
+@dataclass(kw_only=True)
+class NetconfSubscribeConfig(BaseSubscribeConfig):
+    protocol: str = "netconf"
+    operation: str = "subscribe"
+    stream_name: str = "NETCONF"
+    filter: Optional[str] = None
+    start_time: Optional[str] = None
+    stop_time: Optional[str] = None
+    device: str = "default"
+
+
+# Backward compatibility aliases
+SessionConfig = BaseSessionConfig
+GNMISessionConfig = BaseSessionConfig
+NetconfSessionConfig = BaseSessionConfig
+
+
+# =====================================================================
+# Session Config Registry & Factory Helper
+# =====================================================================
+
+SESSION_CONFIG_REGISTRY: Dict[Tuple[str, str], Type[BaseSessionConfig]] = {
+    # gNMI mappings
+    ("gnmi", "capability"): GNMICapabilitiesConfig,
+    ("gnmi", "capabilities"): GNMICapabilitiesConfig,
+    ("gnmi", "get"): GNMIGetConfig,
+    ("gnmi", "set"): GNMISetConfig,
+    ("gnmi", "subscribe"): GNMISubscribeConfig,
+    ("gnmi", "once"): GNMISubscribeConfig,
+    ("gnmi", "poll"): GNMISubscribeConfig,
+    ("gnmi", "stream"): GNMISubscribeConfig,
+
+    # NETCONF mappings
+    ("netconf", "capability"): NetconfCapabilitiesConfig,
+    ("netconf", "capabilities"): NetconfCapabilitiesConfig,
+    ("netconf", "get"): NetconfGetConfig,
+    ("netconf", "get-config"): NetconfGetConfig,
+    ("netconf", "get_config"): NetconfGetConfig,
+    ("netconf", "get-schema"): NetconfGetConfig,
+    ("netconf", "get_schema"): NetconfGetConfig,
+    ("netconf", "edit-config"): NetconfEditConfig,
+    ("netconf", "edit_config"): NetconfEditConfig,
+    ("netconf", "set"): NetconfEditConfig,
+    ("netconf", "subscribe"): NetconfSubscribeConfig,
+}
+
+
+def create_session_config(protocol: str = "", operation: str = "", /, **kwargs) -> BaseSessionConfig:
+    """Factory helper to safely instantiate specialized session configs."""
+    proto = kwargs.pop('protocol', None) or protocol or "gnmi"
+    op = kwargs.pop('operation', None) or operation or ""
+    norm_proto = proto.lower()
+    norm_op = op.lower()
+    key = (norm_proto, norm_op)
+    cls = SESSION_CONFIG_REGISTRY.get(key)
+    if not cls:
+        norm_op_dashed = norm_op.replace('_', '-')
+        cls = SESSION_CONFIG_REGISTRY.get((norm_proto, norm_op_dashed))
+    if not cls:
+        raise ValueError(f"No session config registered for protocol='{proto}' and operation='{op}'")
+
+    # Filter kwargs to only fields accepted by the target dataclass
+    valid_fields = {f.name for f in fields(cls)}
+    filtered_kwargs = {k: v for k, v in kwargs.items() if k in valid_fields}
+    if 'protocol' in valid_fields and 'protocol' not in filtered_kwargs:
+        filtered_kwargs['protocol'] = proto
+    if 'operation' in valid_fields and 'operation' not in filtered_kwargs:
+        filtered_kwargs['operation'] = op
+    return cls(**filtered_kwargs)
+
 
 @dataclass
 class ParsedConfig:
@@ -224,47 +347,55 @@ class CLIConfigBuilder(ConfigBuilder):
                 ssh_key=self.args.ssh_key
             )
 
+            paths = getattr(self.args, 'path', []) or []
+            if isinstance(paths, str):
+                paths = [paths]
+
+            params = {
+                'target': target,
+                'protocol': protocol,
+                'operation': operation,
+                'username': self.args.username,
+                'password': self.args.password,
+                'security': security_profile,
+                'insecure': getattr(self.args, 'insecure', False),
+                'times': times,
+                'subscription_name': "cli_execution",
+            }
+
             if protocol == 'gnmi':
-
-                paths = getattr(self.args, 'path', [])
-                if isinstance(paths, str):
-                    paths = [paths]
-
-                session = GNMISessionConfig(
-                    target=target, protocol=protocol, operation=operation,
-                    username=self.args.username, password=self.args.password,
-                    security=security_profile, subscription_name="cli_execution",
-                    insecure=getattr(self.args, 'insecure', False),
-                    paths=paths,
-                    prefix=getattr(self.args, "prefix", ""),
-                    encoding=getattr(self.args, "encoding", "json_ietf"),
-                    get_type=getattr(self.args, "type", ''),
-                    mode=getattr(self.args, "mode", ""),
-                    sub_mode=getattr(self.args, "sub_mode", ""),
-                    sample_interval=getattr(self.args, "interval", 0),
-                    update_only=getattr(self.args, "update_only", False),
-                    updates=getattr(self.args, "updates", []),
-                    replaces=getattr(self.args, "replaces", []),
-                    deletes=getattr(self.args, "delete", []),
-                )
+                params.update({
+                    'paths': paths,
+                    'prefix': getattr(self.args, "prefix", ""),
+                    'encoding': getattr(self.args, "encoding", "json_ietf"),
+                    'type': getattr(self.args, "type", ''),
+                    'data_type': getattr(self.args, "type", '') or 'all',
+                    'mode': getattr(self.args, "mode", "stream"),
+                    'stream_mode': getattr(self.args, "sub_mode", "sample"),
+                    'sub_mode': getattr(self.args, "sub_mode", "sample"),
+                    'sample_interval': getattr(self.args, "sample_interval", getattr(self.args, "interval", 0)),
+                    'update_only': getattr(self.args, "update_only", False),
+                    'updates_only': getattr(self.args, "update_only", False),
+                    'updates': getattr(self.args, "updates", []) or getattr(self.args, "update", []),
+                    'replaces': getattr(self.args, "replaces", []) or getattr(self.args, "replace", []),
+                    'deletes': getattr(self.args, "delete", []) or getattr(self.args, "deletes", []),
+                })
             elif protocol == 'netconf':
-                session = NetconfSessionConfig(
-                    target=target, protocol=protocol, operation=operation,
-                    username=self.args.username, password=self.args.password,
-                    security=security_profile, subscription_name="cli_execution",
-                    filter=read_payload(getattr(self.args, "filter", "")),
-                    config=read_payload(getattr(self.args, "nc_config", "")),
-                    source=getattr(self.args, "source", ""),
-                    target_datastore=getattr(self.args, "target_datastore", "candidate"),
-                    device=getattr(self.args, "device", "default"),
-                    nc_xpath=getattr(self.args, "nc_xpath", []),
-                    version=getattr(self.args, "version", ""),
-                    identifier=getattr(self.args, "identifier", ""),
-                    schema_format=getattr(self.args, "schema_format", "yang"),
-                )
+                params.update({
+                    'filter': read_payload(getattr(self.args, "filter", "")),
+                    'config': read_payload(getattr(self.args, "nc_config", "")),
+                    'source': getattr(self.args, "source", "") or "running",
+                    'target_datastore': getattr(self.args, "target_datastore", "candidate"),
+                    'device': getattr(self.args, "device", "default"),
+                    'nc_xpath': getattr(self.args, "nc_xpath", []) or [],
+                    'version': getattr(self.args, "version", ""),
+                    'identifier': getattr(self.args, "identifier", ""),
+                    'schema_format': getattr(self.args, "schema_format", "yang"),
+                })
             else:
                 raise ValueError(f"Unknown protocol: {protocol}")
-            
+
+            session = create_session_config(protocol, operation, **params)
             sessions.append(session)
 
         return ParsedConfig(
@@ -330,7 +461,7 @@ class FileConfigBuilder(ConfigBuilder):
             t_username = tgt_info.get('username', global_username)
             t_password = tgt_info.get('password', global_password)
             t_times = tgt_info.get('times', global_times)
-            t_protocol = tgt_info.get('protocol', self.protocol)
+            t_protocol = tgt_info.get('protocol', self.protocol) or 'gnmi'
             t_insecure = tgt_info.get('insecure', global_insecure)
 
             # possible Get, Set, Subscribe list
@@ -350,7 +481,7 @@ class FileConfigBuilder(ConfigBuilder):
                 raise FileConfigError(f"target {target_ip_port} holds two or more RPC types - only one type of RPC is allowed")
 
             if len(t_sub_list): # Subscribe
-                subs = d.get('subscriptions')
+                subs = d.get('subscriptions', {})
                 for sub_name in t_sub_list:
                     if sub_name not in subs:
                         raise FileConfigError(f"subscription {sub_name} not found")
@@ -369,7 +500,9 @@ class FileConfigBuilder(ConfigBuilder):
                     sub_mode = sub_details.get('mode', 'target_defined')
                     sample_interval = sub_details.get('sample_interval', 0)
 
-                    session = GNMISessionConfig(
+                    session = create_session_config(
+                        t_protocol,
+                        'subscribe',
                         target=str(target_ip_port), # Convert in case YAML parses IP as float/int
                         paths=paths,
                         subscription_name=sub_name,
@@ -382,10 +515,11 @@ class FileConfigBuilder(ConfigBuilder):
                         password=t_password,
                         times=t_times,
                         security=global_security,
-                        # Subscribe options
                         mode=named_sub.get('mode', 'stream'),
                         update_only=update_only,
+                        updates_only=update_only,
                         sub_mode=sub_mode,
+                        stream_mode=sub_mode,
                         sample_interval=sample_interval
                     )
                     sessions.append(session)
@@ -394,20 +528,21 @@ class FileConfigBuilder(ConfigBuilder):
                 if isinstance(paths, str):
                     paths = [paths]
 
-                session = GNMISessionConfig(
+                session = create_session_config(
+                    t_protocol,
+                    'get',
                     target=str(target_ip_port), # Convert in case YAML parses IP as float/int
                     paths=paths,
                     subscription_name=f'get-{time.time_ns()}',
                     operation='get',
-                    prefix=named_sub.get('prefix', ''),
-                    encoding=named_sub.get('encoding', 'json_ietf'),
+                    prefix=tgt_info.get('prefix', ''),
+                    encoding=tgt_info.get('encoding', 'json_ietf'),
                     protocol=t_protocol,
                     insecure=t_insecure,
                     username=t_username,
                     password=t_password,
                     times=t_times,
                     security=global_security,
-                    # Get options
                 )
                 sessions.append(session)
                 
@@ -422,19 +557,20 @@ class FileConfigBuilder(ConfigBuilder):
                 if isinstance(deletes, str):
                     deletes = [deletes]
 
-                session = GNMISessionConfig(
+                session = create_session_config(
+                    t_protocol,
+                    'set',
                     target=str(target_ip_port), # Convert in case YAML parses IP as float/int
                     subscription_name=f'set-{time.time_ns()}',
-                    prefix=named_sub.get('prefix', ''),
+                    prefix=tgt_info.get('prefix', ''),
                     operation='set',
-                    encoding=named_sub.get('encoding', 'json_ietf'),
+                    encoding=tgt_info.get('encoding', 'json_ietf'),
                     protocol=t_protocol,
                     insecure=t_insecure,
                     username=t_username,
                     password=t_password,
                     times=t_times,
                     security=global_security,
-                    # Set options
                     updates=updates,
                     replaces=replaces,
                     deletes=deletes,
@@ -456,8 +592,8 @@ def build_args() -> argparse.Namespace:
     parser.add_argument('-t', '--target', action='append', help="List of targets in IP:PORT format")
     parser.add_argument('-d', '--debug', help="Debugging this script", action='store_true')
     parser.add_argument('--times', default=1, type=int, help="Generate duplicated requests - only use for testing")
-    parser.add_argument('--username', default='', help="Username")
-    parser.add_argument('--password', default='', help="Password")
+    parser.add_argument('-u', '--username', default='', help="Username")
+    parser.add_argument('-p', '--password', default='', help="Password")
     parser.add_argument('-i', '--insecure', action='store_true',
                         help="use insecure connection if set True")
 
