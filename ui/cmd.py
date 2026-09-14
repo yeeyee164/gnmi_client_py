@@ -381,11 +381,15 @@ class CLIConfigBuilder(ConfigBuilder):
                     'deletes': getattr(self.args, "delete", []) or getattr(self.args, "deletes", []),
                 })
             elif protocol == 'netconf':
+                raw_cfg = getattr(self.args, "config", "") or getattr(self.args, "nc_config", "")
                 params.update({
                     'filter': read_payload(getattr(self.args, "filter", "")),
-                    'config': read_payload(getattr(self.args, "nc_config", "")),
+                    'config': read_payload(raw_cfg),
                     'source': getattr(self.args, "source", "") or "running",
-                    'target_datastore': getattr(self.args, "target_datastore", "candidate"),
+                    'target_datastore': getattr(self.args, "target_datastore", None) or getattr(self.args, "target", "candidate"),
+                    'default_operation': getattr(self.args, "default_operation", "merge"),
+                    'error_option': getattr(self.args, "error_option", "stop-on-error"),
+                    'test_option': getattr(self.args, "test_option", None),
                     'device': getattr(self.args, "device", "default"),
                     'nc_xpath': getattr(self.args, "nc_xpath", []) or [],
                     'version': getattr(self.args, "version", ""),
@@ -585,10 +589,10 @@ class FileConfigBuilder(ConfigBuilder):
             log_file=d.get('log_file', ''),
         )
 
-def build_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="gNMI Subscription Client")
+def build_args(args=None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="gNMI / NETCONF Client")
 
-    parser.add_argument('-g', '--global-config', default='', help='Path to YAML configuration file for this client')
+    parser.add_argument('-c', '--config', '-g', '--global-config', dest='config', default='', help='Path to YAML configuration file for this client')
     parser.add_argument('-t', '--target', action='append', help="List of targets in IP:PORT format")
     parser.add_argument('-d', '--debug', help="Debugging this script", action='store_true')
     parser.add_argument('--times', default=1, type=int, help="Generate duplicated requests - only use for testing")
@@ -628,7 +632,7 @@ def build_args() -> argparse.Namespace:
     # add gNMI parser
     gnmi_args(proto_parser)
 
-    return parser.parse_args()
+    return parser.parse_args(args)
 
 def netconf_args(parser):
     parser_nc = parser.add_parser('netconf', help='NETwork CONFiguration') 
@@ -663,10 +667,17 @@ def netconf_args(parser):
     parser_get_schema.add_argument('--schema-format', default='yang', help="The data modeling language of the schema")
 
     # <edit-config>
-    parser_set = subparsers.add_parser('set', help="NETCONF <edit-config>")
-    parser_set.add_argument('--target-datastore', default='candidate', help="Target datastore")
-    parser_set.add_argument('--nc-config', required=True,
-                            help="XML string or path to file. If given path not exists, consider it as a 'XML' formatted request")
+    parser_set = subparsers.add_parser('edit-config', aliases=['set'], help="NETCONF <edit-config>")
+    parser_set.add_argument('--target-datastore', '--target', dest='target_datastore', default='candidate',
+                            choices=['candidate', 'running', 'startup'], help="Target datastore (default: candidate)")
+    parser_set.add_argument('-C', '--config', '--nc-config', dest='nc_config', required=True,
+                            help="XML string or path to file containing configuration tree")
+    parser_set.add_argument('--default-operation', choices=['merge', 'replace', 'none'], default='merge',
+                            help="Default operation for <edit-config> (default: merge)")
+    parser_set.add_argument('--error-option', choices=['stop-on-error', 'continue-on-error', 'rollback-on-error'],
+                            default='stop-on-error', help="Error option behavior (default: stop-on-error)")
+    parser_set.add_argument('--test-option', choices=['test-then-set', 'set', 'test-only'], default=None,
+                            help="Test option if target supports :validate")
 
 
 def gnmi_args(parser):
@@ -711,8 +722,13 @@ def gnmi_args(parser):
 
 def config_builder(args) -> ParsedConfig:
     """Build an appropriate `ParsedConfig` class by the contents of argument"""
-    if args.config != '':
+    config_file = getattr(args, 'config', '') or getattr(args, 'global_config', '')
+    if config_file and (getattr(args, 'protocol', None) is None or getattr(args, 'operation', None) is None):
         protocol = getattr(args, 'protocol', 'unknown')
-        return FileConfigBuilder(args.config, protocol=protocol).build()
+        return FileConfigBuilder(config_file, protocol=protocol).build()
     else:
         return CLIConfigBuilder(args).build()
+
+def parse_args(args=None) -> ParsedConfig:
+    """Helper to parse raw argument list and build ParsedConfig directly."""
+    return config_builder(build_args(args))

@@ -314,7 +314,12 @@ class NETCONFFormatter(ProtocolFormatter):
 
         # Handle get, get-config, and other XML RPC replies
         data_xml = getattr(raw_data, 'data_xml', None)
-        xml_str = data_xml if data_xml else getattr(raw_data, 'xml', str(raw_data))
+        if isinstance(data_xml, (str, bytes)):
+            xml_str = data_xml
+        else:
+            xml_str = getattr(raw_data, 'xml', str(raw_data))
+            if not isinstance(xml_str, (str, bytes)):
+                xml_str = str(xml_str)
 
         try:
             parsed = xmltodict.parse(xml_str)
@@ -323,6 +328,10 @@ class NETCONFFormatter(ProtocolFormatter):
                 res['data'] = parsed['data']
             elif 'rpc-reply' in parsed and 'data' in parsed['rpc-reply']:
                 res['data'] = parsed['rpc-reply']['data']
+            elif 'rpc-reply' in parsed and 'ok' in parsed['rpc-reply']:
+                res['data'] = {'ok': True}
+            elif 'ok' in parsed:
+                res['data'] = {'ok': True}
             else:
                 res['data'] = parsed
         except Exception as e:

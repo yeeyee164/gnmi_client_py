@@ -267,6 +267,14 @@ try:
 except ImportError:
     manager = None
     operations = None
+
+#add namespaces
+
+NETCONF_BASE_NS = "urn:ietf:params:xml:ns:netconf:base:1.0"
+NETCONF_NS = {
+    'nc' : NETCONF_BASE_NS
+}
+
 class NetconfClient(BaseClient):
     """
     A "Lite" NETCONF Client utilizing ncclient.
@@ -412,15 +420,115 @@ class NetconfClient(BaseClient):
             # And it present <rpc-error> as a result of <rpc>.
             return e
 
-    def set(self, **kwargs) -> Any:
+    def set(self, updates: Optional[list] = None, replaces: Optional[list] = None, deletes: Optional[list] = None, **kwargs) -> Any:
         """
         Executes a NETCONF <edit-config>.
-        A 'lite' implementation requires raw XML strings from the user.
-        (Will be replaced by libyang automated payload generation later).
+        Handles raw XML strings, file paths, and structured config elements.
         """
-        # Placeholder for lite implementation. 
-        # Advanced edit-config requires strict XML namespacing.
-        raise NotImplementedError("NETCONF Set/Edit-Config is awaiting libyang integration.")
+        try:
+            # 1. Resolve raw configuration payload
+            raw_config = kwargs.get('config') or kwargs.get('nc_config', '')
+            if raw_config and os.path.isfile(raw_config):
+                try:
+                    with open(raw_config, 'r', encoding='utf-8') as f:
+                        raw_config = f.read().strip()
+                except Exception as e:
+                    logger.warning(f"[NetconfClient] Failed to read config file '{raw_config}': {e}")
+
+            extracted_target = None
+            extracted_default_op = None
+            config_xml = ""
+
+            if raw_config:
+                stripped = raw_config.strip()
+                # Check if it contains an XML envelope like <rpc> or <edit-config>
+                if stripped.startswith('<'):
+                    try:
+                        from lxml import etree
+                        root = etree.fromstring(stripped.encode('utf-8'))
+                        # Unwrap <rpc>
+                        if root.tag.endswith('rpc'):
+                            # edit_cfg = root.find('{urn:ietf:params:xml:ns:netconf:base:1.0}edit-config')
+                            edit_cfg = root.find('nc:edit-config', namespaces=NETCONF_NS)
+                            if edit_cfg is None:
+                                edit_cfg = root.find('edit-config')
+                            if edit_cfg is not None:
+                                root = edit_cfg
+                        # Unwrap <edit-config>
+                        if root.tag.endswith('edit-config'):
+                            # target_el = root.find('{urn:ietf:params:xml:ns:netconf:base:1.0}target')
+                            target_el = root.find('nc:edit-config', namespaces=NETCONF_NS)
+                            if target_el is None:
+                                target_el = root.find('target')
+                            if target_el is not None and len(target_el) > 0:
+                                extracted_target = etree.QName(target_el[0]).localname
+                            # def_op_el = root.find('{urn:ietf:params:xml:ns:netconf:base:1.0}default-operation')
+                            def_op_el = root.find('nc:edit-config', namespaces=NETCONF_NS)
+                            if def_op_el is None:
+                                def_op_el = root.find('default-operation')
+                            if def_op_el is not None:
+                                extracted_default_op = def_op_el.text
+                            # config_elem = root.find('{urn:ietf:params:xml:ns:netconf:base:1.0}config')
+                            config_elem = root.find('nc:config', namespaces=NETCONF_NS)
+                            if config_elem is None:
+                                config_elem = root.find('config')
+                            if config_elem is not None:
+                                config_xml = etree.tostring(config_elem, encoding='unicode')
+                        elif root.tag.endswith('config'):
+                            config_xml = etree.tostring(root, encoding='unicode')
+                        else:
+                            config_xml = f'<config xmlns="{NETCONF_BASE_NS}">\n{stripped}\n</config>'
+                    except Exception:
+                        if stripped.startswith('<config'):
+                            config_xml = stripped
+                        else:
+                            config_xml = f'<config xmlns="{NETCONF_BASE_NS}">\n{stripped}\n</config>'
+                else:
+                    config_xml = f'<config xmlns="{NETCONF_BASE_NS}">\n{stripped}\n</config>'
+            else:
+                # Assemble from updates / replaces / deletes if passed
+                snippets = []
+                if updates:
+                    snippets.extend(updates if isinstance(updates, list) else [updates])
+                if replaces:
+                    snippets.extend(replaces if isinstance(replaces, list) else [replaces])
+                if deletes:
+                    snippets.extend(deletes if isinstance(deletes, list) else [deletes])
+                inner = "\n".join(str(s) for s in snippets)
+                config_xml = f'<config xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">\n{inner}\n</config>'
+
+            # 2. Resolve Target Datastore (candidate vs running)
+            # Precedence: explicitly provided in kwargs -> extracted from XML -> default to candidate
+            target_ds = kwargs.get('target_datastore') or kwargs.get('target') or extracted_target or 'candidate'
+
+            # Capability check: if candidate requested but not supported, fallback to running
+            if target_ds == 'candidate':
+                if not any(':candidate' in cap for cap in self.session.server_capabilities):
+                    logger.warning("[NetconfClient] Server does not advertise :candidate capability. Falling back to 'running'.")
+                    target_ds = 'running'
+
+            # 3. Resolve default-operation, error-option, test-option
+            default_op = kwargs.get('default_operation') or kwargs.get('default_op') or extracted_default_op or 'merge'
+            default_op = default_op.lower() if default_op else 'merge'
+            if default_op not in ['merge', 'replace', 'none']:
+                default_op = 'merge'
+
+            error_option = kwargs.get('error_option', 'stop-on-error')
+            test_option = kwargs.get('test_option')
+
+            logger.debug(f"[NetconfClient] edit-config target={target_ds}, default_op={default_op}, error_option={error_option}")
+            edit_kwargs = {
+                'target': target_ds,
+                'config': config_xml,
+                'default_operation': default_op,
+                'error_option': error_option
+            }
+            if test_option:
+                edit_kwargs['test_option'] = test_option
+
+            return self.session.edit_config(**edit_kwargs)
+        except operations.RPCError as e:
+            return e
 
     def subscribe(self, request_iterator: Any) -> Iterator[Any]:
         """
