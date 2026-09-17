@@ -1,5 +1,6 @@
 from __future__ import annotations
 import os
+import json
 try:
     import grpc
     from specs.gnmi import gnmi_pb2, gnmi_pb2_grpc
@@ -173,31 +174,158 @@ class GNMIClient(BaseClient):
         response = self.stub.Get(request, metadata=self.metadata)
         return response
 
-    def set(self, prefix: str, updates: list, replaces: list, deletes: list) -> gnmi_pb2.SetResponse:
-        """ Executes an Unary Set RPC """
+    def _build_typed_val(self, val: Any, encoding: str = "json_ietf") -> gnmi_pb2.TypedValue:
+        """Translates Python inputs into gnmi_pb2.TypedValue adhering to gNMI Section 3.4."""
+        if gnmi_pb2 is None:
+            raise RuntimeError("gnmi_pb2 is not loaded")
+
+        if isinstance(val, gnmi_pb2.TypedValue):
+            return val
+
+        tv = gnmi_pb2.TypedValue()
+
+        # 1. Check if string points to a file reference (@file or valid path)
+        if isinstance(val, str):
+            file_path = val[1:] if val.startswith('@') else val
+            if os.path.isfile(file_path):
+                try:
+                    with open(file_path, 'rb') as f:
+                        file_bytes = f.read()
+                    # Try to parse file content as JSON (dict or list)
+                    try:
+                        parsed_json = json.loads(file_bytes.decode('utf-8'))
+                        if isinstance(parsed_json, (dict, list)):
+                            if encoding == 'json':
+                                tv.json_val = file_bytes
+                            else:
+                                tv.json_ietf_val = file_bytes
+                            return tv
+                    except Exception:
+                        pass
+                    tv.bytes_val = file_bytes
+                    return tv
+                except Exception as e:
+                    logger.warning(f"[Client] Failed to read payload file {file_path}: {e}")
+
+            # 2. Check if string is an inline JSON object or list
+            try:
+                parsed = json.loads(val)
+                if isinstance(parsed, (dict, list)):
+                    raw_bytes = val.encode('utf-8')
+                    if encoding == 'json':
+                        tv.json_val = raw_bytes
+                    else:
+                        tv.json_ietf_val = raw_bytes
+                    return tv
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+            # 3. Check for boolean strings
+            if val.lower() == 'true':
+                tv.bool_val = True
+                return tv
+            elif val.lower() == 'false':
+                tv.bool_val = False
+                return tv
+
+            # 4. Fallback for string
+            tv.string_val = str(val)
+            return tv
+
+        # 5. Native Python booleans (MUST check before int)
+        if isinstance(val, bool):
+            tv.bool_val = val
+            return tv
+
+        # 6. Native Python integers
+        if isinstance(val, int):
+            if val >= 0:
+                tv.uint_val = val
+            else:
+                tv.int_val = val
+            return tv
+
+        # 7. Native Python floats
+        if isinstance(val, float):
+            tv.float_val = val
+            return tv
+
+        # 8. Native Python dictionaries & lists
+        if isinstance(val, (dict, list)):
+            raw_bytes = json.dumps(val).encode('utf-8')
+            if encoding == 'json':
+                tv.json_val = raw_bytes
+            else:
+                tv.json_ietf_val = raw_bytes
+            return tv
+
+        # 9. Bytes
+        if isinstance(val, bytes):
+            tv.bytes_val = val
+            return tv
+
+        # 10. Fallback
+        tv.string_val = str(val)
+        return tv
+
+    def set(self, updates: list = None, replaces: list = None, deletes: list = None, prefix: str = "", encoding: str = None, **kwargs) -> Any:
+        """ Executes a Unary Set RPC adhering to gNMI Section 3.4 """
+        if gnmi_pb2 is None:
+            raise RuntimeError("gnmi_pb2 is not loaded")
+
+        enc = encoding or self.encoding or "json_ietf"
         request = gnmi_pb2.SetRequest()
 
         if prefix:
             request.prefix.CopyFrom(parse_path(prefix))
 
-        # build three paths - update, replace and delete
+        # Logical execution order per Section 3.4.3:
+        # 1. delete
         for path in (deletes or []):
-            request.delete.append(parse_path(path))
+            del_elem = request.delete.add()
+            del_elem.CopyFrom(parse_path(path))
 
-        # cosider each value as "(path, data)"
-        for path, typed_val in (updates or []):
-            update_obj = request.update.add()
-            update_obj.path.CopyFrom(parse_path(path))
-            update_obj.val.CopyFrom(typed_val)
+        # 2. replace
+        for item in (replaces or []):
+            if isinstance(item, (tuple, list)) and len(item) == 2:
+                p, v = item
+            elif isinstance(item, dict):
+                for p, v in item.items():
+                    rep_obj = request.replace.add()
+                    rep_obj.path.CopyFrom(parse_path(p))
+                    rep_obj.val.CopyFrom(self._build_typed_val(v, encoding=enc))
+                continue
+            else:
+                p, v = item, ""
+            rep_obj = request.replace.add()
+            rep_obj.path.CopyFrom(parse_path(p))
+            rep_obj.val.CopyFrom(self._build_typed_val(v, encoding=enc))
 
-        # cosider each value as "(path, data)"
-        for path, typed_val in (replaces or []):
-            replace_obj = request.update.add()
-            replace_obj.path.CopyFrom(parse_path(path))
-            replace_obj.val.CopyFrom(typed_val)
+        # 3. update
+        for item in (updates or []):
+            if isinstance(item, (tuple, list)) and len(item) == 2:
+                p, v = item
+            elif isinstance(item, dict):
+                for p, v in item.items():
+                    upd_obj = request.update.add()
+                    upd_obj.path.CopyFrom(parse_path(p))
+                    upd_obj.val.CopyFrom(self._build_typed_val(v, encoding=enc))
+                continue
+            else:
+                p, v = item, ""
+            upd_obj = request.update.add()
+            upd_obj.path.CopyFrom(parse_path(p))
+            upd_obj.val.CopyFrom(self._build_typed_val(v, encoding=enc))
 
-        response = self.stub.Set(request, metadata=self.metadata)
-        return response
+        try:
+            response = self.stub.Set(request, metadata=self.metadata)
+            return response
+        except grpc.RpcError as e:
+            code = e.code() if hasattr(e, 'code') else 'UNKNOWN'
+            details = e.details() if hasattr(e, 'details') else str(e)
+            logger.error(f"[Client] gNMI Set RPC failed: code={code}, details={details}")
+            raise
+
 
     def _build_subscribe_request(self, config: dict) -> gnmi_pb2.SubscribeRequest:
         """ Constructs the SubscribeRequest object """

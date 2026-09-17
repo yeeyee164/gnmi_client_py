@@ -2,10 +2,10 @@ Data flow
 ====
 
 ```text
-[ CLI Input / YAML Config ]
+[ CLI Input / YAML Config ] (ParsedConfig)
             │
             ▼
-       [ ui/cmd.py ]  ──────────> Creates [ SessionConfig ] (GNMISessionConfig / NetconfSessionConfig)[for each operation]
+       [ ui/cmd.py ]  ──────────> Creates [ SessionConfig ] (GNMI<RPC>SessionConfig / Netconf<RPC>SessionConfig)[for each operation and defined RPCs]
             │
             ▼
    [ ManagerFactory ]

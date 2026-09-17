@@ -80,9 +80,17 @@ Execute the following implementation phases in sequential order. Provide planned
      * Support inline JSON strings. (e.g., `/interfaces/interface[name="eth4"]/config:::{"description": "Uplink", "enabled": true}`)
        * NOTE: I wrapped list of key `name` to double quotation because this leaf has a type `string` in YANG. But do not consider YANG type validation.
      * Support disk payload references using @ syntax: `/system/aaa:::path/to/payload.json` or `/system/aaa:::@path/to/payload.json`
+   * \--update-path + \--update-value / \--replace-path + \--replace-value: Support paired string request.
+     * Each path should point to leaf and also have following value
+     * e.g., --update-path `/interfaces/interface[name="lo123"]/config/description` --update-value "Loopback123123"
+   * \--update-path + \--update-file / \--replace-path + \--replace-file: Support paired string request.
+     * Each path should point to writable container/list
+     * File has same meaning as given by `@` syntax.
+     * e.g., --update-path `/interfaces/interface[name="lo123"]/config` --update-file `path/to/json-file`
    * \--delete: Accept repeated path strings (e.g., `--delete "/interfaces/interface[name=\"Loopback0\"]"`).
    * \--prefix: Accept a string representing the gNMI base path prefix.  
    * Normalize input into lists of (path, value) tuples for updates/replaces, and path strings for deletes.  
+
 3. **YAML Parsing (FileConfigBuilder for gNMI):**  
    * In target operation blocks with operation: set (or type: set), parse the set: structure:  
      ```yaml

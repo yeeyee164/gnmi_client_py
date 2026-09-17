@@ -169,7 +169,11 @@ def parse_xpath_keys(s: str) -> Dict[str, str]:
             # Replace escaped brackets: \] -> ] and \[ -> [
             k = k.replace(r'\]', ']').replace(r'\[', '[')
             v = v.replace(r'\]', ']').replace(r'\[', '[')
+            # Strip enclosing matching quotes from value if present
+            if len(v) >= 2 and ((v[0] == '"' and v[-1] == '"') or (v[0] == "'" and v[-1] == "'")):
+                v = v[1:-1]
             kvs[k] = v
+
             in_key = False
         else:
             if not in_key:
