@@ -2,9 +2,7 @@
 
 ## **1\. Project Context & Recent Architectural Fixes**
 
-You are acting as a **Senior Network Automation Software Architect** working on the gnmi\_client\_py repository.
-
-**Recent System Update (Crucial Context):**
+### **Recent System Update (Crucial Context):**
 
 We recently identified and fixed a critical state-management bug. Previously, all workers shared a single, global ParsedConfig data class, which caused major routing and state conflicts during multi-target/multi-protocol executions.
 

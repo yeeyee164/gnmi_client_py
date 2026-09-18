@@ -485,7 +485,9 @@ class NetconfClient(BaseClient):
                     raise ValueError("An Identifier (YANG module name) is required for <get-schema>")
 
                 version = kwargs.get('version', "")
-                fmt = kwargs.get('schema_format') or kwargs.get('format', 'yang')
+                fmt = kwargs.get('schema_format') or kwargs.get('format')
+                if fmt and fmt.lower() == 'yang':
+                    fmt = None
 
                 return self.session.get_schema(identifier=ident, version=version, format=fmt)
 
@@ -514,7 +516,7 @@ class NetconfClient(BaseClient):
                     if stripped.startswith('<filter'):
                         filter_xml = stripped
                     else:
-                        filter_xml = f'<filter type="subtree">{stripped}</filter>'
+                        filter_xml = f'<filter xmlns="{NETCONF_BASE_NS}" type="subtree">{stripped}</filter>'
                 else:
                     filter_xml = f'<filter type="xpath" select="{stripped}"/>'
             elif paths:
@@ -576,7 +578,6 @@ class NetconfClient(BaseClient):
                         root = etree.fromstring(stripped.encode('utf-8'))
                         # Unwrap <rpc>
                         if root.tag.endswith('rpc'):
-                            # edit_cfg = root.find('{urn:ietf:params:xml:ns:netconf:base:1.0}edit-config')
                             edit_cfg = root.find('nc:edit-config', namespaces=NETCONF_NS)
                             if edit_cfg is None:
                                 edit_cfg = root.find('edit-config')
@@ -584,19 +585,16 @@ class NetconfClient(BaseClient):
                                 root = edit_cfg
                         # Unwrap <edit-config>
                         if root.tag.endswith('edit-config'):
-                            # target_el = root.find('{urn:ietf:params:xml:ns:netconf:base:1.0}target')
-                            target_el = root.find('nc:edit-config', namespaces=NETCONF_NS)
+                            target_el = root.find('nc:target', namespaces=NETCONF_NS)
                             if target_el is None:
                                 target_el = root.find('target')
                             if target_el is not None and len(target_el) > 0:
                                 extracted_target = etree.QName(target_el[0]).localname
-                            # def_op_el = root.find('{urn:ietf:params:xml:ns:netconf:base:1.0}default-operation')
-                            def_op_el = root.find('nc:edit-config', namespaces=NETCONF_NS)
+                            def_op_el = root.find('nc:default-operation', namespaces=NETCONF_NS)
                             if def_op_el is None:
                                 def_op_el = root.find('default-operation')
                             if def_op_el is not None:
                                 extracted_default_op = def_op_el.text
-                            # config_elem = root.find('{urn:ietf:params:xml:ns:netconf:base:1.0}config')
                             config_elem = root.find('nc:config', namespaces=NETCONF_NS)
                             if config_elem is None:
                                 config_elem = root.find('config')
@@ -615,15 +613,31 @@ class NetconfClient(BaseClient):
                     config_xml = f'<config xmlns="{NETCONF_BASE_NS}">\n{stripped}\n</config>'
             else:
                 # Assemble from updates / replaces / deletes if passed
-                snippets = []
-                if updates:
-                    snippets.extend(updates if isinstance(updates, list) else [updates])
-                if replaces:
-                    snippets.extend(replaces if isinstance(replaces, list) else [replaces])
-                if deletes:
-                    snippets.extend(deletes if isinstance(deletes, list) else [deletes])
-                inner = "\n".join(str(s) for s in snippets)
-                config_xml = f'<config xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">\n{inner}\n</config>'
+                def _tag_snippet(snippet: Any, op_name: str) -> str:
+                    snip_str = str(snippet).strip()
+                    if not snip_str:
+                        return ""
+                    if snip_str.startswith('<'):
+                        try:
+                            from lxml import etree
+                            node = etree.fromstring(snip_str.encode('utf-8'))
+                            if op_name:
+                                node.set('{urn:ietf:params:xml:ns:netconf:base:1.0}operation', op_name)
+                            return etree.tostring(node, encoding='unicode')
+                        except Exception:
+                            return snip_str
+                    return snip_str
+
+                xml_snippets = []
+                for u in (updates or []):
+                    xml_snippets.append(_tag_snippet(u, 'merge'))
+                for r in (replaces or []):
+                    xml_snippets.append(_tag_snippet(r, 'replace'))
+                for d in (deletes or []):
+                    xml_snippets.append(_tag_snippet(d, 'delete'))
+
+                inner = "\n".join(s for s in xml_snippets if s)
+                config_xml = f'<config xmlns="{NETCONF_BASE_NS}" xmlns:nc="{NETCONF_BASE_NS}">\n{inner}\n</config>'
 
             # 2. Resolve Target Datastore (candidate vs running)
             # Precedence: explicitly provided in kwargs -> extracted from XML -> default to candidate
@@ -654,7 +668,18 @@ class NetconfClient(BaseClient):
             if test_option:
                 edit_kwargs['test_option'] = test_option
 
-            return self.session.edit_config(**edit_kwargs)
+            res = self.session.edit_config(**edit_kwargs)
+
+            # Auto-commit candidate if commit requested (default True)
+            commit_requested = kwargs.get('commit', True)
+            if commit_requested and target_ds == 'candidate' and hasattr(self.session, 'commit'):
+                try:
+                    self.session.commit()
+                except operations.RPCError as e:
+                    logger.error(f"[NetconfClient] Commit failed: {e}")
+                    return e
+
+            return res
         except operations.RPCError as e:
             return e
 

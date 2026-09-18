@@ -131,7 +131,10 @@ class SetWorker(BaseUnaryWorker):
             self.deletes = deletes or []
             self.prefix = kwargs.get('prefix', '')
 
-        self.validator = ValidatorFactory.get_validator(self.protocol)
+        try:
+            self.validator = ValidatorFactory.get_validator(self.protocol)
+        except (NotImplementedError, ValueError):
+            self.validator = None
 
     def _validate_paths(self):
         """Performs offline validation of all paths in SetRequest adhering to gNMI Section 3.4.5 & 2.7."""
@@ -164,12 +167,20 @@ class SetWorker(BaseUnaryWorker):
     def start(self):
         logger.debug(f"[Worker(Set) {self.target_ip}] Requesting Set...")
         try:
-            # 1. validate inputs offline before dispatching network call
-            self._validate_paths()
+            # 1. validate inputs offline before dispatching network call if validator available
+            if self.validator is not None:
+                self._validate_paths()
 
             # 2. create a client session and execute
             with self._get_client() as client:
-                result = client.set(**self.kwargs)
+                call_kwargs = dict(self.kwargs)
+                if self.updates and 'updates' not in call_kwargs:
+                    call_kwargs['updates'] = self.updates
+                if self.replaces and 'replaces' not in call_kwargs:
+                    call_kwargs['replaces'] = self.replaces
+                if self.deletes and 'deletes' not in call_kwargs:
+                    call_kwargs['deletes'] = self.deletes
+                result = client.set(**call_kwargs)
                 return self._format_result("set", result)
         except Exception as e:
             logger.error(f"[Worker(Set) {self.target_ip}] Error: {e}")

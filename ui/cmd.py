@@ -203,7 +203,11 @@ class NetconfEditConfig(BaseSetConfig):
     default_operation: str = "merge"
     test_option: Optional[str] = None
     error_option: str = "stop-on-error"
+    commit: bool = True
     device: str = "default"
+    updates: Optional[list] = None
+    replaces: Optional[list] = None
+    deletes: Optional[list] = None
 
 
 @dataclass(kw_only=True)
@@ -534,6 +538,7 @@ class CLIConfigBuilder(ConfigBuilder):
                     'default_operation': getattr(self.args, "default_operation", "merge"),
                     'error_option': getattr(self.args, "error_option", "stop-on-error"),
                     'test_option': getattr(self.args, "test_option", None),
+                    'commit': getattr(self.args, "commit", True),
                     'device': getattr(self.args, "device", "default"),
                     'nc_xpath': getattr(self.args, "nc_xpath", []) or [],
                     'version': getattr(self.args, "version", ""),
@@ -891,6 +896,8 @@ def netconf_args(parser):
                             default='stop-on-error', help="Error option behavior (default: stop-on-error)")
     parser_set.add_argument('--test-option', choices=['test-then-set', 'set', 'test-only'], default=None,
                             help="Test option if target supports :validate")
+    parser_set.add_argument('--no-commit', dest='commit', action='store_false', default=True,
+                            help="Do not commit candidate datastore changes after edit-config")
 
 
 def gnmi_args(parser):
