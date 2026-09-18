@@ -57,9 +57,8 @@ class ValidatorFactory:
 
         if protocol == 'gnmi':
             return GNMIValidator()
-        elif protocol == 'netconf':
-            raise NotImplementedError("NETCONF validator support is comming soon")
-        elif protocol == 'restconf':
-            raise NotImplementedError("RESTCONF validator support is comming soon")
+        elif protocol in ('netconf', 'restconf'):
+            # Offline validation for NETCONF will be introduced in Phase 4 (libyang)
+            return None
         else:
             raise ValueError(f"Not supported protocol: {protocol}")

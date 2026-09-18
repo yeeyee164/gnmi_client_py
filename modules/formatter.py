@@ -113,7 +113,7 @@ class GNMIFormatter(ProtocolFormatter):
             res.append(n_dict)
         return res
 
-    def _format_set(self, resp:SetResponse, meta):
+    def _format_set(self, resp: SetResponse, meta):
         """
         Formats a gNMI SetResponse.
 
@@ -122,16 +122,23 @@ class GNMIFormatter(ProtocolFormatter):
         - **response**
             - path
             - op(Operation)
+            - message(Error)
         - **timestamp**
 
         Supported extension(gnmi_ext.proto)
         - None
-
         """
         res = {}
-        if meta: res.update(meta)
+        if meta:
+            res.update(meta)
 
         res['timestamp'] = resp.timestamp
+        if resp.timestamp:
+            res['time'] = datetime.datetime.fromtimestamp(resp.timestamp / 1e9, tz=datetime.timezone.utc).isoformat()
+
+        if resp.HasField('prefix'):
+            res['prefix'] = gnmi_path_to_xpath(resp.prefix)
+
         op_map = {
             0: 'INVALID',
             1: 'DELETE',
@@ -139,12 +146,20 @@ class GNMIFormatter(ProtocolFormatter):
             3: 'UPDATE',
         }
 
+        res['responses'] = []
         for r in resp.response:
-            res['responses'].append({
-                'path': r.path,
-                'op': op_map.get(r.op, str(r.op))
-            })
+            item = {
+                'path': gnmi_path_to_xpath(r.path),
+                'op': op_map.get(r.op, str(r.op)),
+            }
+            if r.HasField('message'):
+                item['message'] = {
+                    'code': r.message.code,
+                    'msg': r.message.msg,
+                }
+            res['responses'].append(item)
         return res
+
 
     def _format_capability(self, resp: CapabilityResponse, meta):
         """
@@ -314,7 +329,12 @@ class NETCONFFormatter(ProtocolFormatter):
 
         # Handle get, get-config, and other XML RPC replies
         data_xml = getattr(raw_data, 'data_xml', None)
-        xml_str = data_xml if data_xml else getattr(raw_data, 'xml', str(raw_data))
+        if isinstance(data_xml, (str, bytes)):
+            xml_str = data_xml
+        else:
+            xml_str = getattr(raw_data, 'xml', str(raw_data))
+            if not isinstance(xml_str, (str, bytes)):
+                xml_str = str(xml_str)
 
         try:
             parsed = xmltodict.parse(xml_str)
@@ -323,6 +343,10 @@ class NETCONFFormatter(ProtocolFormatter):
                 res['data'] = parsed['data']
             elif 'rpc-reply' in parsed and 'data' in parsed['rpc-reply']:
                 res['data'] = parsed['rpc-reply']['data']
+            elif 'rpc-reply' in parsed and 'ok' in parsed['rpc-reply']:
+                res['data'] = {'ok': True}
+            elif 'ok' in parsed:
+                res['data'] = {'ok': True}
             else:
                 res['data'] = parsed
         except Exception as e:

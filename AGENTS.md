@@ -43,8 +43,7 @@ Familiarize yourself with the workspace layout before making any modifications:
 ├── specs/  
 │   ├── \_\_init\_\_.py  
 │   ├── base\_client.py            \# BaseClient ABC (\_\_enter\_\_, \_\_exit\_\_, get, set, subscribe, capabilities)  
-│   ├── client.py                 \# GNMIClient (implements BaseClient using grpcio)  
-│   ├── netconf\_client.py         \# NetconfClient (implements BaseClient using ncclient)  
+│   ├── client.py                 \# GNMIClient (implements BaseClient using grpcio), NETCONFCLient (implements BaseClient using ncclient)
 │   ├── base\_validator.py         \# BaseValidator ABC for offline syntax/semantic checks  
 │   ├── gnmi\_validator.py         \# GNMI path validation (wildcard checks, OpenConfig syntax)  
 │   └── netconf\_rpc\_design.md     \# Detailed architectural mapping for NETCONF RPCs  

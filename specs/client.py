@@ -1,5 +1,6 @@
 from __future__ import annotations
 import os
+import json
 try:
     import grpc
     from specs.gnmi import gnmi_pb2, gnmi_pb2_grpc
@@ -145,7 +146,9 @@ class GNMIClient(BaseClient):
         """ Executes an Unary Get RPC """
         prefix = kwargs.get('prefix', "")
         paths = kwargs.get('paths', [])
-        type = kwargs.get('type', '')
+        type_arg = kwargs.get('type') or kwargs.get('data_type') or ''
+        if isinstance(type_arg, str) and type_arg.lower() == 'all':
+            type_arg = ''
 
         get_type = {
             'state': gnmi_pb2.GetRequest.STATE,
@@ -156,7 +159,7 @@ class GNMIClient(BaseClient):
 
         request = gnmi_pb2.GetRequest(
             encoding=self.encoding_map[self.encoding],
-            type=get_type[type]
+            type=get_type.get(type_arg.lower() if isinstance(type_arg, str) else '', gnmi_pb2.GetRequest.ALL)
         )
         
         if prefix:
@@ -171,31 +174,158 @@ class GNMIClient(BaseClient):
         response = self.stub.Get(request, metadata=self.metadata)
         return response
 
-    def set(self, prefix: str, updates: list, replaces: list, deletes: list) -> gnmi_pb2.SetResponse:
-        """ Executes an Unary Set RPC """
+    def _build_typed_val(self, val: Any, encoding: str = "json_ietf") -> gnmi_pb2.TypedValue:
+        """Translates Python inputs into gnmi_pb2.TypedValue adhering to gNMI Section 3.4."""
+        if gnmi_pb2 is None:
+            raise RuntimeError("gnmi_pb2 is not loaded")
+
+        if isinstance(val, gnmi_pb2.TypedValue):
+            return val
+
+        tv = gnmi_pb2.TypedValue()
+
+        # 1. Check if string points to a file reference (@file or valid path)
+        if isinstance(val, str):
+            file_path = val[1:] if val.startswith('@') else val
+            if os.path.isfile(file_path):
+                try:
+                    with open(file_path, 'rb') as f:
+                        file_bytes = f.read()
+                    # Try to parse file content as JSON (dict or list)
+                    try:
+                        parsed_json = json.loads(file_bytes.decode('utf-8'))
+                        if isinstance(parsed_json, (dict, list)):
+                            if encoding == 'json':
+                                tv.json_val = file_bytes
+                            else:
+                                tv.json_ietf_val = file_bytes
+                            return tv
+                    except Exception:
+                        pass
+                    tv.bytes_val = file_bytes
+                    return tv
+                except Exception as e:
+                    logger.warning(f"[Client] Failed to read payload file {file_path}: {e}")
+
+            # 2. Check if string is an inline JSON object or list
+            try:
+                parsed = json.loads(val)
+                if isinstance(parsed, (dict, list)):
+                    raw_bytes = val.encode('utf-8')
+                    if encoding == 'json':
+                        tv.json_val = raw_bytes
+                    else:
+                        tv.json_ietf_val = raw_bytes
+                    return tv
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+            # 3. Check for boolean strings
+            if val.lower() == 'true':
+                tv.bool_val = True
+                return tv
+            elif val.lower() == 'false':
+                tv.bool_val = False
+                return tv
+
+            # 4. Fallback for string
+            tv.string_val = str(val)
+            return tv
+
+        # 5. Native Python booleans (MUST check before int)
+        if isinstance(val, bool):
+            tv.bool_val = val
+            return tv
+
+        # 6. Native Python integers
+        if isinstance(val, int):
+            if val >= 0:
+                tv.uint_val = val
+            else:
+                tv.int_val = val
+            return tv
+
+        # 7. Native Python floats
+        if isinstance(val, float):
+            tv.float_val = val
+            return tv
+
+        # 8. Native Python dictionaries & lists
+        if isinstance(val, (dict, list)):
+            raw_bytes = json.dumps(val).encode('utf-8')
+            if encoding == 'json':
+                tv.json_val = raw_bytes
+            else:
+                tv.json_ietf_val = raw_bytes
+            return tv
+
+        # 9. Bytes
+        if isinstance(val, bytes):
+            tv.bytes_val = val
+            return tv
+
+        # 10. Fallback
+        tv.string_val = str(val)
+        return tv
+
+    def set(self, updates: list = None, replaces: list = None, deletes: list = None, prefix: str = "", encoding: str = None, **kwargs) -> Any:
+        """ Executes a Unary Set RPC adhering to gNMI Section 3.4 """
+        if gnmi_pb2 is None:
+            raise RuntimeError("gnmi_pb2 is not loaded")
+
+        enc = encoding or self.encoding or "json_ietf"
         request = gnmi_pb2.SetRequest()
 
         if prefix:
             request.prefix.CopyFrom(parse_path(prefix))
 
-        # build three paths - update, replace and delete
+        # Logical execution order per Section 3.4.3:
+        # 1. delete
         for path in (deletes or []):
-            request.delete.append(parse_path(path))
+            del_elem = request.delete.add()
+            del_elem.CopyFrom(parse_path(path))
 
-        # cosider each value as "(path, data)"
-        for path, typed_val in (updates or []):
-            update_obj = request.update.add()
-            update_obj.path.CopyFrom(parse_path(path))
-            update_obj.val.CopyFrom(typed_val)
+        # 2. replace
+        for item in (replaces or []):
+            if isinstance(item, (tuple, list)) and len(item) == 2:
+                p, v = item
+            elif isinstance(item, dict):
+                for p, v in item.items():
+                    rep_obj = request.replace.add()
+                    rep_obj.path.CopyFrom(parse_path(p))
+                    rep_obj.val.CopyFrom(self._build_typed_val(v, encoding=enc))
+                continue
+            else:
+                p, v = item, ""
+            rep_obj = request.replace.add()
+            rep_obj.path.CopyFrom(parse_path(p))
+            rep_obj.val.CopyFrom(self._build_typed_val(v, encoding=enc))
 
-        # cosider each value as "(path, data)"
-        for path, typed_val in (replaces or []):
-            replace_obj = request.update.add()
-            replace_obj.path.CopyFrom(parse_path(path))
-            replace_obj.val.CopyFrom(typed_val)
+        # 3. update
+        for item in (updates or []):
+            if isinstance(item, (tuple, list)) and len(item) == 2:
+                p, v = item
+            elif isinstance(item, dict):
+                for p, v in item.items():
+                    upd_obj = request.update.add()
+                    upd_obj.path.CopyFrom(parse_path(p))
+                    upd_obj.val.CopyFrom(self._build_typed_val(v, encoding=enc))
+                continue
+            else:
+                p, v = item, ""
+            upd_obj = request.update.add()
+            upd_obj.path.CopyFrom(parse_path(p))
+            upd_obj.val.CopyFrom(self._build_typed_val(v, encoding=enc))
 
-        response = self.stub.Set(request, metadata=self.metadata)
-        return response
+        try:
+            response = self.stub.Set(request, metadata=self.metadata)
+            return response
+        except grpc.RpcError as e:
+            code = e.code() if hasattr(e, 'code') else 'UNKNOWN'
+            details = e.details() if hasattr(e, 'details') else str(e)
+            logger.error(f"[Client] gNMI Set RPC failed: code={code}, details={details}")
+            raise
+
 
     def _build_subscribe_request(self, config: dict) -> gnmi_pb2.SubscribeRequest:
         """ Constructs the SubscribeRequest object """
@@ -223,7 +353,7 @@ class GNMIClient(BaseClient):
             sub.path.CopyFrom(parse_path(path_obj))
 
             if mode == 'stream':
-                smode = config.get('sub_mode', 'sample').lower()
+                smode = str(config.get('sub_mode') or config.get('stream_mode') or 'sample').lower()
                 if smode == 'sample':
                     sub.mode = gnmi_pb2.SubscriptionMode.SAMPLE
                     sub.sample_interval = config.get('sample_interval', 0) * NANOSECOND
@@ -265,6 +395,14 @@ try:
 except ImportError:
     manager = None
     operations = None
+
+#add namespaces
+
+NETCONF_BASE_NS = "urn:ietf:params:xml:ns:netconf:base:1.0"
+NETCONF_NS = {
+    'nc' : NETCONF_BASE_NS
+}
+
 class NetconfClient(BaseClient):
     """
     A "Lite" NETCONF Client utilizing ncclient.
@@ -347,7 +485,9 @@ class NetconfClient(BaseClient):
                     raise ValueError("An Identifier (YANG module name) is required for <get-schema>")
 
                 version = kwargs.get('version', "")
-                fmt = kwargs.get('schema_format') or kwargs.get('format', 'yang')
+                fmt = kwargs.get('schema_format') or kwargs.get('format')
+                if fmt and fmt.lower() == 'yang':
+                    fmt = None
 
                 return self.session.get_schema(identifier=ident, version=version, format=fmt)
 
@@ -376,7 +516,7 @@ class NetconfClient(BaseClient):
                     if stripped.startswith('<filter'):
                         filter_xml = stripped
                     else:
-                        filter_xml = f'<filter type="subtree">{stripped}</filter>'
+                        filter_xml = f'<filter xmlns="{NETCONF_BASE_NS}" type="subtree">{stripped}</filter>'
                 else:
                     filter_xml = f'<filter type="xpath" select="{stripped}"/>'
             elif paths:
@@ -410,15 +550,138 @@ class NetconfClient(BaseClient):
             # And it present <rpc-error> as a result of <rpc>.
             return e
 
-    def set(self, **kwargs) -> Any:
+    def set(self, updates: Optional[list] = None, replaces: Optional[list] = None, deletes: Optional[list] = None, **kwargs) -> Any:
         """
         Executes a NETCONF <edit-config>.
-        A 'lite' implementation requires raw XML strings from the user.
-        (Will be replaced by libyang automated payload generation later).
+        Handles raw XML strings, file paths, and structured config elements.
         """
-        # Placeholder for lite implementation. 
-        # Advanced edit-config requires strict XML namespacing.
-        raise NotImplementedError("NETCONF Set/Edit-Config is awaiting libyang integration.")
+        try:
+            # 1. Resolve raw configuration payload
+            raw_config = kwargs.get('config') or kwargs.get('nc_config', '')
+            if raw_config and os.path.isfile(raw_config):
+                try:
+                    with open(raw_config, 'r', encoding='utf-8') as f:
+                        raw_config = f.read().strip()
+                except Exception as e:
+                    logger.warning(f"[NetconfClient] Failed to read config file '{raw_config}': {e}")
+
+            extracted_target = None
+            extracted_default_op = None
+            config_xml = ""
+
+            if raw_config:
+                stripped = raw_config.strip()
+                # Check if it contains an XML envelope like <rpc> or <edit-config>
+                if stripped.startswith('<'):
+                    try:
+                        from lxml import etree
+                        root = etree.fromstring(stripped.encode('utf-8'))
+                        # Unwrap <rpc>
+                        if root.tag.endswith('rpc'):
+                            edit_cfg = root.find('nc:edit-config', namespaces=NETCONF_NS)
+                            if edit_cfg is None:
+                                edit_cfg = root.find('edit-config')
+                            if edit_cfg is not None:
+                                root = edit_cfg
+                        # Unwrap <edit-config>
+                        if root.tag.endswith('edit-config'):
+                            target_el = root.find('nc:target', namespaces=NETCONF_NS)
+                            if target_el is None:
+                                target_el = root.find('target')
+                            if target_el is not None and len(target_el) > 0:
+                                extracted_target = etree.QName(target_el[0]).localname
+                            def_op_el = root.find('nc:default-operation', namespaces=NETCONF_NS)
+                            if def_op_el is None:
+                                def_op_el = root.find('default-operation')
+                            if def_op_el is not None:
+                                extracted_default_op = def_op_el.text
+                            config_elem = root.find('nc:config', namespaces=NETCONF_NS)
+                            if config_elem is None:
+                                config_elem = root.find('config')
+                            if config_elem is not None:
+                                config_xml = etree.tostring(config_elem, encoding='unicode')
+                        elif root.tag.endswith('config'):
+                            config_xml = etree.tostring(root, encoding='unicode')
+                        else:
+                            config_xml = f'<config xmlns="{NETCONF_BASE_NS}">\n{stripped}\n</config>'
+                    except Exception:
+                        if stripped.startswith('<config'):
+                            config_xml = stripped
+                        else:
+                            config_xml = f'<config xmlns="{NETCONF_BASE_NS}">\n{stripped}\n</config>'
+                else:
+                    config_xml = f'<config xmlns="{NETCONF_BASE_NS}">\n{stripped}\n</config>'
+            else:
+                # Assemble from updates / replaces / deletes if passed
+                def _tag_snippet(snippet: Any, op_name: str) -> str:
+                    snip_str = str(snippet).strip()
+                    if not snip_str:
+                        return ""
+                    if snip_str.startswith('<'):
+                        try:
+                            from lxml import etree
+                            node = etree.fromstring(snip_str.encode('utf-8'))
+                            if op_name:
+                                node.set('{urn:ietf:params:xml:ns:netconf:base:1.0}operation', op_name)
+                            return etree.tostring(node, encoding='unicode')
+                        except Exception:
+                            return snip_str
+                    return snip_str
+
+                xml_snippets = []
+                for u in (updates or []):
+                    xml_snippets.append(_tag_snippet(u, 'merge'))
+                for r in (replaces or []):
+                    xml_snippets.append(_tag_snippet(r, 'replace'))
+                for d in (deletes or []):
+                    xml_snippets.append(_tag_snippet(d, 'delete'))
+
+                inner = "\n".join(s for s in xml_snippets if s)
+                config_xml = f'<config xmlns="{NETCONF_BASE_NS}" xmlns:nc="{NETCONF_BASE_NS}">\n{inner}\n</config>'
+
+            # 2. Resolve Target Datastore (candidate vs running)
+            # Precedence: explicitly provided in kwargs -> extracted from XML -> default to candidate
+            target_ds = kwargs.get('target_datastore') or kwargs.get('target') or extracted_target or 'candidate'
+
+            # Capability check: if candidate requested but not supported, fallback to running
+            if target_ds == 'candidate':
+                if not any(':candidate' in cap for cap in self.session.server_capabilities):
+                    logger.warning("[NetconfClient] Server does not advertise :candidate capability. Falling back to 'running'.")
+                    target_ds = 'running'
+
+            # 3. Resolve default-operation, error-option, test-option
+            default_op = kwargs.get('default_operation') or kwargs.get('default_op') or extracted_default_op or 'merge'
+            default_op = default_op.lower() if default_op else 'merge'
+            if default_op not in ['merge', 'replace', 'none']:
+                default_op = 'merge'
+
+            error_option = kwargs.get('error_option', 'stop-on-error')
+            test_option = kwargs.get('test_option')
+
+            logger.debug(f"[NetconfClient] edit-config target={target_ds}, default_op={default_op}, error_option={error_option}")
+            edit_kwargs = {
+                'target': target_ds,
+                'config': config_xml,
+                'default_operation': default_op,
+                'error_option': error_option
+            }
+            if test_option:
+                edit_kwargs['test_option'] = test_option
+
+            res = self.session.edit_config(**edit_kwargs)
+
+            # Auto-commit candidate if commit requested (default True)
+            commit_requested = kwargs.get('commit', True)
+            if commit_requested and target_ds == 'candidate' and hasattr(self.session, 'commit'):
+                try:
+                    self.session.commit()
+                except operations.RPCError as e:
+                    logger.error(f"[NetconfClient] Commit failed: {e}")
+                    return e
+
+            return res
+        except operations.RPCError as e:
+            return e
 
     def subscribe(self, request_iterator: Any) -> Iterator[Any]:
         """

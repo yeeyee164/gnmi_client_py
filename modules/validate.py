@@ -28,7 +28,7 @@ class BaseValidator(ABC):
 
 class GNMIValidator(BaseValidator):
 
-    def validate_path(self, path_str:str, operation=""):
+    def validate_path(self, path_str: str, operation: str = "", prefix: str = ""):
         """Validate a path for gNMI requests"""
 
         try:
@@ -36,17 +36,25 @@ class GNMIValidator(BaseValidator):
             gnmi_path = mp.parse_path(path_str)
             elems = gnmi_path.elem
 
-            # 2. when the operation is 'Set', it cannot contain wildcards
+            # 2. when the operation is 'Set', enforce Section 3.4.5 and Section 2.7
             if operation.lower() == 'set':
+                if prefix:
+                    prefix_path = mp.parse_path(prefix)
+                    if prefix_path.origin and gnmi_path.origin:
+                        raise mp.MalformedXPathError(
+                            f"Origin cannot be specified in both prefix ('{prefix_path.origin}') and path ('{gnmi_path.origin}') (RFC Section 2.7)"
+                        )
+
                 for elem in elems:
-                    if elem.name in ['*', '...']:
-                        raise mp.MalformedXPathError("set operation cannot use wildcards")
+                    if elem.name in ['*', '...'] or '*' in elem.name or '...' in elem.name:
+                        raise mp.MalformedXPathError("set operation cannot use wildcards in element name")
 
                     for key_val in elem.key.values():
-                        if key_val in ['*', '...']:
+                        if key_val in ['*', '...'] or '*' in key_val or '...' in key_val:
                             raise mp.MalformedXPathKeyError("set operation cannot use wildcards as a key")
         except Exception as e:
-            raise PathValidationError(e)
+            raise PathValidationError(e) from e
+
 
 class ValidateConfig:
     @staticmethod
@@ -76,9 +84,11 @@ class ValidateConfig:
             # validate for each subscription
             for se in cfg.sessions:
                 # validate given path
-                for path in se.paths:
+                paths = getattr(se, 'paths', []) or []
+                for path in paths:
                     data = mp.parse_path(path)
                     if data is None:
                         raise mp.EmptyPathElemNameError
+
         except Exception as e: #propagate exception
             raise e

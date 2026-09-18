@@ -124,26 +124,67 @@ class SetWorker(BaseUnaryWorker):
             self.updates = getattr(self.config, 'updates', None) or updates or []
             self.replaces = getattr(self.config, 'replaces', None) or replaces or []
             self.deletes = getattr(self.config, 'deletes', None) or deletes or []
+            self.prefix = getattr(self.config, 'prefix', '') or kwargs.get('prefix', '')
         else:
             self.updates = updates or []
             self.replaces = replaces or []
             self.deletes = deletes or []
+            self.prefix = kwargs.get('prefix', '')
+
+        try:
+            self.validator = ValidatorFactory.get_validator(self.protocol)
+        except (NotImplementedError, ValueError):
+            self.validator = None
+
+    def _validate_paths(self):
+        """Performs offline validation of all paths in SetRequest adhering to gNMI Section 3.4.5 & 2.7."""
+        if self.prefix:
+            self.validator.validate_path(self.prefix, 'set')
+
+        all_paths = []
+        for item in self.updates:
+            if isinstance(item, (tuple, list)) and len(item) >= 1:
+                all_paths.append(item[0])
+            elif isinstance(item, dict):
+                all_paths.extend(list(item.keys()))
+            elif isinstance(item, str):
+                all_paths.append(item)
+
+        for item in self.replaces:
+            if isinstance(item, (tuple, list)) and len(item) >= 1:
+                all_paths.append(item[0])
+            elif isinstance(item, dict):
+                all_paths.extend(list(item.keys()))
+            elif isinstance(item, str):
+                all_paths.append(item)
+
+        for item in self.deletes:
+            all_paths.append(item)
+
+        for path in all_paths:
+            self.validator.validate_path(path, 'set', prefix=self.prefix)
 
     def start(self):
         logger.debug(f"[Worker(Set) {self.target_ip}] Requesting Set...")
         try:
-            #1. validate inputs
-            # TODO: it will be handled by protocol-agnostic validator
-            # for path in self.updates + self.replaces:
-            #     self.validator.validate_path(path, 'set')
+            # 1. validate inputs offline before dispatching network call if validator available
+            if self.validator is not None:
+                self._validate_paths()
 
-            #2. create a client session
+            # 2. create a client session and execute
             with self._get_client() as client:
-                result = client.set(**self.kwargs)
-                return self._format_result("Set", result)
+                call_kwargs = dict(self.kwargs)
+                if self.updates and 'updates' not in call_kwargs:
+                    call_kwargs['updates'] = self.updates
+                if self.replaces and 'replaces' not in call_kwargs:
+                    call_kwargs['replaces'] = self.replaces
+                if self.deletes and 'deletes' not in call_kwargs:
+                    call_kwargs['deletes'] = self.deletes
+                result = client.set(**call_kwargs)
+                return self._format_result("set", result)
         except Exception as e:
             logger.error(f"[Worker(Set) {self.target_ip}] Error: {e}")
-            return self._format_result("Set", e)
+            return self._format_result("set", e)
 
     def __str__(self):
         return "Set"
