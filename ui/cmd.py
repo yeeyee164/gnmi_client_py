@@ -13,7 +13,7 @@ import argparse
 import json
 import time
 from dataclasses import dataclass, field, fields
-from typing import List, Optional, Dict, Tuple, Type
+from typing import List, Optional, Dict, Tuple, Type, Any
 from abc import ABC, abstractmethod
 
 from modules.security import SecurityProfile
@@ -134,10 +134,12 @@ class GNMIGetConfig(BaseGetConfig):
 class GNMISetConfig(BaseSetConfig):
     protocol: str = "gnmi"
     operation: str = "set"
-    updates: List[Tuple[str, str]] = field(default_factory=list)
-    replaces: List[Tuple[str, str]] = field(default_factory=list)
+    updates: List[Tuple[str, Any]] = field(default_factory=list)
+    replaces: List[Tuple[str, Any]] = field(default_factory=list)
     deletes: List[str] = field(default_factory=list)
     prefix: str = ""
+    encoding: str = "json_ietf"
+
 
 
 @dataclass(kw_only=True)
@@ -219,6 +221,9 @@ class NetconfSubscribeConfig(BaseSubscribeConfig):
 SessionConfig = BaseSessionConfig
 GNMISessionConfig = BaseSessionConfig
 NetconfSessionConfig = BaseSessionConfig
+BaseSetSessionConfig = BaseSetConfig
+GNMISetSessionConfig = GNMISetConfig
+
 
 
 # =====================================================================
@@ -306,7 +311,110 @@ class ConfigBuilder(ABC):
         """Parse input and return `ParsedConfig` object"""
         pass
 
+class PairedAction(argparse.Action):
+    def __init__(self, option_strings, dest, group_type=None, kind=None, **kwargs):
+        self.group_type = group_type
+        self.kind = kind
+        super().__init__(option_strings, dest, **kwargs)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        items = getattr(namespace, self.dest, None)
+        if items is None:
+            items = []
+            setattr(namespace, self.dest, items)
+        items.append(values)
+
+        order_attr = f"_{self.group_type}_order"
+        order_list = getattr(namespace, order_attr, None)
+        if order_list is None:
+            order_list = []
+            setattr(namespace, order_attr, order_list)
+        order_list.append((self.kind, values))
+
+
+def _parse_paired_options(args, group_type: str) -> List[Tuple[str, str]]:
+    """
+    Parses paired options (--\<group\>-path with --\<group\>-value or --\<group\>-file).
+    - \<group\> is either `update` or `replace`
+
+    Supports both interleaved order and batch lists, validating that every path
+    is strictly paired with exactly one value or file.
+    """
+    order_attr = f"_{group_type}_order"
+    order_list = getattr(args, order_attr, None)
+
+    results: List[Tuple[str, str]] = []
+    if order_list:
+        current_path = None
+        for kind, val in order_list:
+            if kind == 'path':
+                if current_path is not None:
+                    raise ValueError(f"Each --{group_type}-path must be paired with either a --{group_type}-value or --{group_type}-file (unpaired path: '{current_path}')")
+                val_clean = val.strip()
+                if not val_clean:
+                    raise ValueError(f"--{group_type}-path cannot be empty")
+                current_path = val_clean
+            elif kind == 'value':
+                if current_path is None:
+                    raise ValueError(f"--{group_type}-value must be preceded by --{group_type}-path")
+                results.append((current_path, val.strip()))
+                current_path = None
+            elif kind == 'file':
+                if current_path is None:
+                    raise ValueError(f"--{group_type}-file must be preceded by --{group_type}-path")
+                file_val = val.strip()
+                if not file_val:
+                    raise ValueError(f"--{group_type}-file cannot be empty")
+                if not file_val.startswith('@'):
+                    file_val = f"@{file_val}"
+                results.append((current_path, file_val))
+                current_path = None
+
+        if current_path is not None:
+            raise ValueError(f"Each --{group_type}-path must be paired with either a --{group_type}-value or --{group_type}-file (unpaired path: '{current_path}')")
+    else:
+        paths = getattr(args, f"{group_type}_path", []) or []
+        values = getattr(args, f"{group_type}_value", []) or []
+        files = getattr(args, f"{group_type}_file", []) or []
+        if isinstance(paths, str): paths = [paths]
+        if isinstance(values, str): values = [values]
+        if isinstance(files, str): files = [files]
+
+        if paths:
+            total_val_files = len(values) + len(files)
+            if len(paths) != total_val_files:
+                raise ValueError(f"Mismatched paired options: {len(paths)} --{group_type}-path options provided, but {total_val_files} values/files given")
+
+            if len(values) == len(paths) and not files:
+                for p, v in zip(paths, values):
+                    results.append((p.strip(), v.strip()))
+            elif len(files) == len(paths) and not values:
+                for p, f in zip(paths, files):
+                    file_val = f.strip()
+                    if not file_val.startswith('@'):
+                        file_val = f"@{file_val}"
+                    results.append((p.strip(), file_val))
+            else:
+                val_idx = 0
+                file_idx = 0
+                for p in paths:
+                    if val_idx < len(values):
+                        results.append((p.strip(), values[val_idx].strip()))
+                        val_idx += 1
+                    elif file_idx < len(files):
+                        file_val = files[file_idx].strip()
+                        if not file_val.startswith('@'):
+                            file_val = f"@{file_val}"
+                        results.append((p.strip(), file_val))
+                        file_idx += 1
+        elif values or files:
+            raise ValueError(f"--{group_type}-value or --{group_type}-file provided without preceding --{group_type}-path")
+
+    return results
+
+
 class CLIConfigBuilder(ConfigBuilder):
+
     def __init__(self, args):
         self.args = args
     
@@ -364,6 +472,42 @@ class CLIConfigBuilder(ConfigBuilder):
             }
 
             if protocol == 'gnmi':
+                gnmi_updates = []
+                for item in (getattr(self.args, "updates", []) or getattr(self.args, "update", []) or []):
+                    if isinstance(item, tuple):
+                        gnmi_updates.append(item)
+                    elif isinstance(item, str):
+                        if ':::' in item:
+                            p, v = item.split(':::', 1)
+                            gnmi_updates.append((p.strip(), v.strip()))
+                        elif '=' in item and not item.endswith(']'):
+                            p, v = item.split('=', 1)
+                            gnmi_updates.append((p.strip(), v.strip()))
+                        else:
+                            gnmi_updates.append((item.strip(), ""))
+
+                gnmi_updates.extend(_parse_paired_options(self.args, 'update'))
+
+                gnmi_replaces = []
+                for item in (getattr(self.args, "replaces", []) or getattr(self.args, "replace", []) or []):
+                    if isinstance(item, tuple):
+                        gnmi_replaces.append(item)
+                    elif isinstance(item, str):
+                        if ':::' in item:
+                            p, v = item.split(':::', 1)
+                            gnmi_replaces.append((p.strip(), v.strip()))
+                        elif '=' in item and not item.endswith(']'):
+                            p, v = item.split('=', 1)
+                            gnmi_replaces.append((p.strip(), v.strip()))
+                        else:
+                            gnmi_replaces.append((item.strip(), ""))
+                gnmi_replaces.extend(_parse_paired_options(self.args, 'replace'))
+
+                raw_deletes = getattr(self.args, "delete", []) or getattr(self.args, "deletes", []) or []
+                if isinstance(raw_deletes, str):
+                    raw_deletes = [raw_deletes]
+                gnmi_deletes = [d.strip() for d in raw_deletes if d]
+
                 params.update({
                     'paths': paths,
                     'prefix': getattr(self.args, "prefix", ""),
@@ -376,9 +520,9 @@ class CLIConfigBuilder(ConfigBuilder):
                     'sample_interval': getattr(self.args, "sample_interval", getattr(self.args, "interval", 0)),
                     'update_only': getattr(self.args, "update_only", False),
                     'updates_only': getattr(self.args, "update_only", False),
-                    'updates': getattr(self.args, "updates", []) or getattr(self.args, "update", []),
-                    'replaces': getattr(self.args, "replaces", []) or getattr(self.args, "replace", []),
-                    'deletes': getattr(self.args, "delete", []) or getattr(self.args, "deletes", []),
+                    'updates': gnmi_updates,
+                    'replaces': gnmi_replaces,
+                    'deletes': gnmi_deletes,
                 })
             elif protocol == 'netconf':
                 raw_cfg = getattr(self.args, "config", "") or getattr(self.args, "nc_config", "")
@@ -469,17 +613,18 @@ class FileConfigBuilder(ConfigBuilder):
             t_insecure = tgt_info.get('insecure', global_insecure)
 
             # possible Get, Set, Subscribe list
-
             t_sub_list = tgt_info.get('subscriptions', [])
             t_get_list = tgt_info.get('get-path', [])
             t_update_list = tgt_info.get('update-list', [])
             t_replace_list = tgt_info.get('replace-list', [])
             t_delete_list = tgt_info.get('delete-list', [])
+            t_set_block = tgt_info.get('set', {})
+            t_op = (tgt_info.get('operation', '') or tgt_info.get('type', '')).lower()
 
             # For simplicity, there's only one type of RPC is allowed
             if len(t_sub_list): tgt_cnt += 1
             if len(t_get_list): tgt_cnt += 1
-            if len(t_update_list) or len(t_replace_list) or len(t_delete_list): tgt_cnt += 1
+            if len(t_update_list) or len(t_replace_list) or len(t_delete_list) or t_set_block or t_op == 'set': tgt_cnt += 1
 
             if tgt_cnt > 1:
                 raise FileConfigError(f"target {target_ip_port} holds two or more RPC types - only one type of RPC is allowed")
@@ -551,24 +696,92 @@ class FileConfigBuilder(ConfigBuilder):
                 sessions.append(session)
                 
             else: # Set
-                updates = t_update_list
-                replaces = t_replace_list
-                deletes = t_delete_list
-                if isinstance(updates, str):
-                    updates = [updates]
-                if isinstance(replaces, str):
-                    replaces = [replaces]
-                if isinstance(deletes, str):
-                    deletes = [deletes]
+                updates = []
+                replaces = []
+                deletes = []
+                set_prefix = tgt_info.get('prefix', '')
+                set_encoding = tgt_info.get('encoding', 'json_ietf')
+
+                if t_set_block and isinstance(t_set_block, dict):
+                    set_prefix = t_set_block.get('prefix', set_prefix)
+                    set_encoding = t_set_block.get('encoding', set_encoding)
+
+                    upd_val = t_set_block.get('update', {})
+                    if isinstance(upd_val, dict):
+                        updates.extend(list(upd_val.items()))
+                    elif isinstance(upd_val, list):
+                        for item in upd_val:
+                            if isinstance(item, (tuple, list)) and len(item) == 2:
+                                updates.append(tuple(item))
+                            elif isinstance(item, dict):
+                                updates.extend(list(item.items()))
+                            elif isinstance(item, str) and ':::' in item:
+                                p, v = item.split(':::', 1)
+                                updates.append((p.strip(), v.strip()))
+                            else:
+                                updates.append((item, ""))
+
+                    rep_val = t_set_block.get('replace', {})
+                    if isinstance(rep_val, dict):
+                        replaces.extend(list(rep_val.items()))
+                    elif isinstance(rep_val, list):
+                        for item in rep_val:
+                            if isinstance(item, (tuple, list)) and len(item) == 2:
+                                replaces.append(tuple(item))
+                            elif isinstance(item, dict):
+                                replaces.extend(list(item.items()))
+                            elif isinstance(item, str) and ':::' in item:
+                                p, v = item.split(':::', 1)
+                                replaces.append((p.strip(), v.strip()))
+                            else:
+                                replaces.append((item, ""))
+
+                    del_val = t_set_block.get('delete', [])
+                    if isinstance(del_val, str):
+                        deletes.append(del_val)
+                    elif isinstance(del_val, list):
+                        deletes.extend(del_val)
+
+                if t_update_list:
+                    items = t_update_list if isinstance(t_update_list, list) else [t_update_list]
+                    for item in items:
+                        if isinstance(item, (tuple, list)) and len(item) == 2:
+                            updates.append(tuple(item))
+                        elif isinstance(item, dict):
+                            updates.extend(list(item.items()))
+                        elif isinstance(item, str) and ':::' in item:
+                            p, v = item.split(':::', 1)
+                            updates.append((p.strip(), v.strip()))
+                        else:
+                            updates.append((item, ""))
+
+                if t_replace_list:
+                    items = t_replace_list if isinstance(t_replace_list, list) else [t_replace_list]
+                    for item in items:
+                        if isinstance(item, (tuple, list)) and len(item) == 2:
+                            replaces.append(tuple(item))
+                        elif isinstance(item, dict):
+                            replaces.extend(list(item.items()))
+                        elif isinstance(item, str) and ':::' in item:
+                            p, v = item.split(':::', 1)
+                            replaces.append((p.strip(), v.strip()))
+                        else:
+                            replaces.append((item, ""))
+
+                if t_delete_list:
+                    if isinstance(t_delete_list, str):
+                        deletes.append(t_delete_list)
+                    elif isinstance(t_delete_list, list):
+                        deletes.extend(t_delete_list)
 
                 session = create_session_config(
                     t_protocol,
                     'set',
                     target=str(target_ip_port), # Convert in case YAML parses IP as float/int
                     subscription_name=f'set-{time.time_ns()}',
-                    prefix=tgt_info.get('prefix', ''),
+                    prefix=set_prefix,
                     operation='set',
-                    encoding=tgt_info.get('encoding', 'json_ietf'),
+                    encoding=set_encoding,
                     protocol=t_protocol,
                     insecure=t_insecure,
                     username=t_username,
@@ -703,9 +916,25 @@ def gnmi_args(parser):
 
     # UNARY: Set
     parser_set = subparsers.add_parser('set', help='execute SET RPC')
-    parser_set.add_argument('--update', action='append', help='Update path and value (format: path=value)')
-    parser_set.add_argument('--replace', action='append', help='Replace path and value (format: path=value)')
+    parser_set.add_argument('--prefix', default='', help="common prefix for all given paths")
+    parser_set.add_argument('--update', action='append', help='Update path and value (format: PATH:::VALUE or PATH:::@file)')
+    parser_set.add_argument('--update-path', action=PairedAction, group_type='update', kind='path',
+                            help='Target path for update operation (paired with --update-value or --update-file)')
+    parser_set.add_argument('--update-value', action=PairedAction, group_type='update', kind='value',
+                            help='Inline value for update operation (paired with --update-path)')
+    parser_set.add_argument('--update-file', action=PairedAction, group_type='update', kind='file',
+                            help='File path containing payload for update operation (paired with --update-path)')
+    parser_set.add_argument('--replace', action='append', help='Replace path and value (format: PATH:::VALUE or PATH:::@file)')
+    parser_set.add_argument('--replace-path', action=PairedAction, group_type='replace', kind='path',
+                            help='Target path for replace operation (paired with --replace-value or --replace-file)')
+    parser_set.add_argument('--replace-value', action=PairedAction, group_type='replace', kind='value',
+                            help='Inline value for replace operation (paired with --replace-path)')
+    parser_set.add_argument('--replace-file', action=PairedAction, group_type='replace', kind='file',
+                            help='File path containing payload for replace operation (paired with --replace-path)')
     parser_set.add_argument('--delete', action='append', help='Delete path')
+    parser_set.add_argument('--encoding', default='json_ietf',
+                            choices=['json', 'json_ietf', 'bytes', 'proto', 'ascii'],
+                            help="encoding format for SET RPC")
 
     # Subscribe operation
     parser_sub = subparsers.add_parser('subscribe', help="specify mode for STREAM mode of Subscribe RPC")
