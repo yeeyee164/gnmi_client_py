@@ -1,0 +1,16 @@
+protocol: "netconf"
+
+targets:
+  172.20.20.2:830:
+    username: "admin"
+    password: "NokiaSrl1!"
+    operation: "get-config"
+    source: "running"
+    filter: "<interfaces xmlns=\"http://openconfig.net/yang/interfaces\"><interface><name>mgmt0</name><config/></interface></interfaces>"
+
+outputs:
+  default_output:
+    type: file
+    file-type: stdout
+    format: json
+

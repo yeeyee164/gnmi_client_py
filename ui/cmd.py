@@ -18,6 +18,35 @@ from abc import ABC, abstractmethod
 
 from modules.security import SecurityProfile
 from util.utils import read_payload
+from config.model import (
+    Protocol,
+    ConnectionConfig,
+    ExecutionConfig,
+    SessionConfig,
+)
+from config.selectors import (
+    Selector,
+    PathSelector,
+    FilterSelector,
+)
+from config.delivery import (
+    DeliveryMode,
+    DeliveryPolicy,
+)
+from config.operations import (
+    OperationConfig,
+    CapabilitiesOperation,
+    GetSchemaOperation,
+    GetOperation,
+    ChangeType,
+    Change,
+    SetOperation,
+    SubscribeOperation,
+)
+from config.protocol_options import (
+    GNMIOptions,
+    NetconfOptions,
+)
 
 class FileConfigError(Exception):
     """Custom exception raised when given config vlolates some criteria"""
@@ -34,9 +63,7 @@ class BaseSessionConfig:
     username: str = ""
     password: str = ""
     security: SecurityProfile = field(default_factory=SecurityProfile)
-    operation: str = ""
-    insecure: bool = False
-    times: int = 1
+    # operation: str = ""
 
     @property
     def target_ip(self) -> str:
@@ -222,7 +249,6 @@ class NetconfSubscribeConfig(BaseSubscribeConfig):
 
 
 # Backward compatibility aliases
-SessionConfig = BaseSessionConfig
 GNMISessionConfig = BaseSessionConfig
 NetconfSessionConfig = BaseSessionConfig
 BaseSetSessionConfig = BaseSetConfig
@@ -463,92 +489,193 @@ class CLIConfigBuilder(ConfigBuilder):
             if isinstance(paths, str):
                 paths = [paths]
 
-            params = {
-                'target': target,
-                'protocol': protocol,
-                'operation': operation,
-                'username': self.args.username,
-                'password': self.args.password,
-                'security': security_profile,
-                'insecure': getattr(self.args, 'insecure', False),
-                'times': times,
-                'subscription_name': "cli_execution",
-            }
+            conn = ConnectionConfig(
+                target=target,
+                username=self.args.username or "",
+                password=self.args.password or "",
+                security=security_profile,
+                insecure=getattr(self.args, 'insecure', False)
+            )
+
+            exec_cfg = ExecutionConfig(
+                times=times
+            )
+
+            paths = getattr(self.args, 'path', []) or []
+            if isinstance(paths, str):
+                paths = [paths]
+
+            prefix = getattr(self.args, "prefix", "")
 
             if protocol == 'gnmi':
-                gnmi_updates = []
-                for item in (getattr(self.args, "updates", []) or getattr(self.args, "update", []) or []):
-                    if isinstance(item, tuple):
-                        gnmi_updates.append(item)
-                    elif isinstance(item, str):
-                        if ':::' in item:
-                            p, v = item.split(':::', 1)
-                            gnmi_updates.append((p.strip(), v.strip()))
-                        elif '=' in item and not item.endswith(']'):
-                            p, v = item.split('=', 1)
-                            gnmi_updates.append((p.strip(), v.strip()))
-                        else:
-                            gnmi_updates.append((item.strip(), ""))
+                proto_enum = Protocol.GNMI
+                if operation in ('capability', 'capabilities'):
+                    op_obj = CapabilitiesOperation()
+                elif operation == 'get':
+                    encoding = getattr(self.args, "encoding", "json_ietf")
+                    data_type = getattr(self.args, "type", '') or getattr(self.args, "data_type", '') or 'all'
+                    op_obj = GetOperation(
+                        selector=PathSelector(paths=tuple(paths), prefix=prefix),
+                        read_scope=data_type,
+                        protocol_options=GNMIOptions(encoding=encoding)
+                    )
+                elif operation == 'set':
+                    changes = []
 
-                gnmi_updates.extend(_parse_paired_options(self.args, 'update'))
+                    gnmi_updates = []
+                    for item in (getattr(self.args, "updates", []) or getattr(self.args, "update", []) or []):
+                        if isinstance(item, tuple):
+                            gnmi_updates.append(item)
+                        elif isinstance(item, str):
+                            if ':::' in item:
+                                p, v = item.split(':::', 1)
+                                gnmi_updates.append((p.strip(), v.strip()))
+                            elif '=' in item and not item.endswith(']'):
+                                p, v = item.split('=', 1)
+                                gnmi_updates.append((p.strip(), v.strip()))
+                            else:
+                                gnmi_updates.append((item.strip(), ""))
+                    gnmi_updates.extend(_parse_paired_options(self.args, 'update'))
 
-                gnmi_replaces = []
-                for item in (getattr(self.args, "replaces", []) or getattr(self.args, "replace", []) or []):
-                    if isinstance(item, tuple):
-                        gnmi_replaces.append(item)
-                    elif isinstance(item, str):
-                        if ':::' in item:
-                            p, v = item.split(':::', 1)
-                            gnmi_replaces.append((p.strip(), v.strip()))
-                        elif '=' in item and not item.endswith(']'):
-                            p, v = item.split('=', 1)
-                            gnmi_replaces.append((p.strip(), v.strip()))
-                        else:
-                            gnmi_replaces.append((item.strip(), ""))
-                gnmi_replaces.extend(_parse_paired_options(self.args, 'replace'))
+                    gnmi_replaces = []
+                    for item in (getattr(self.args, "replaces", []) or getattr(self.args, "replace", []) or []):
+                        if isinstance(item, tuple):
+                            gnmi_replaces.append(item)
+                        elif isinstance(item, str):
+                            if ':::' in item:
+                                p, v = item.split(':::', 1)
+                                gnmi_replaces.append((p.strip(), v.strip()))
+                            elif '=' in item and not item.endswith(']'):
+                                p, v = item.split('=', 1)
+                                gnmi_replaces.append((p.strip(), v.strip()))
+                            else:
+                                gnmi_replaces.append((item.strip(), ""))
+                    gnmi_replaces.extend(_parse_paired_options(self.args, 'replace'))
 
-                raw_deletes = getattr(self.args, "delete", []) or getattr(self.args, "deletes", []) or []
-                if isinstance(raw_deletes, str):
-                    raw_deletes = [raw_deletes]
-                gnmi_deletes = [d.strip() for d in raw_deletes if d]
+                    raw_deletes = getattr(self.args, "delete", []) or getattr(self.args, "deletes", []) or []
+                    if isinstance(raw_deletes, str):
+                        raw_deletes = [raw_deletes]
+                    gnmi_deletes = [d.strip() for d in raw_deletes if d]
 
-                params.update({
-                    'paths': paths,
-                    'prefix': getattr(self.args, "prefix", ""),
-                    'encoding': getattr(self.args, "encoding", "json_ietf"),
-                    'type': getattr(self.args, "type", ''),
-                    'data_type': getattr(self.args, "type", '') or 'all',
-                    'mode': getattr(self.args, "mode", "stream"),
-                    'stream_mode': getattr(self.args, "sub_mode", "sample"),
-                    'sub_mode': getattr(self.args, "sub_mode", "sample"),
-                    'sample_interval': getattr(self.args, "sample_interval", getattr(self.args, "interval", 0)),
-                    'update_only': getattr(self.args, "update_only", False),
-                    'updates_only': getattr(self.args, "update_only", False),
-                    'updates': gnmi_updates,
-                    'replaces': gnmi_replaces,
-                    'deletes': gnmi_deletes,
-                })
+                    for p, v in gnmi_updates:
+                        changes.append(Change(path=p, operation=ChangeType.MERGE, value=v))
+                    for p, v in gnmi_replaces:
+                        changes.append(Change(path=p, operation=ChangeType.REPLACE, value=v))
+                    for d in gnmi_deletes:
+                        changes.append(Change(path=d, operation=ChangeType.DELETE, value=None))
+
+                    encoding = getattr(self.args, "encoding", "json_ietf")
+                    op_obj = SetOperation(
+                        changes=tuple(changes),
+                        prefix=prefix,
+                        protocol_options=GNMIOptions(encoding=encoding)
+                    )
+                elif operation in ('subscribe', 'stream', 'once', 'poll'):
+                    mode_str = getattr(self.args, "mode", "stream").lower()
+                    sub_mode_str = str(getattr(self.args, "sub_mode", getattr(self.args, "stream_mode", "sample"))).lower()
+                    if mode_str == 'once':
+                        del_mode = DeliveryMode.SNAPSHOT
+                    elif mode_str == 'poll':
+                        del_mode = DeliveryMode.POLL
+                    elif sub_mode_str == 'on_change':
+                        del_mode = DeliveryMode.ON_CHANGE
+                    else:
+                        del_mode = DeliveryMode.PERIODIC
+
+                    sample_interval = getattr(self.args, "sample_interval", getattr(self.args, "interval", 0))
+                    del_policy = DeliveryPolicy(
+                        mode=del_mode,
+                        interval=sample_interval,
+                        heartbeat=0,
+                        suppress_redundant=False
+                    )
+                    encoding = getattr(self.args, "encoding", "json_ietf")
+                    updates_only = getattr(self.args, "update_only", False) or getattr(self.args, "updates_only", False)
+                    op_obj = SubscribeOperation(
+                        selector=PathSelector(paths=tuple(paths), prefix=prefix),
+                        delivery=del_policy,
+                        subscription_name="cli_execution",
+                        protocol_options=GNMIOptions(encoding=encoding, updates_only=updates_only)
+                    )
+                else:
+                    raise ValueError(f"Unknown gNMI operation: {operation}")
+
             elif protocol == 'netconf':
-                raw_cfg = getattr(self.args, "config", "") or getattr(self.args, "nc_config", "")
-                params.update({
-                    'filter': read_payload(getattr(self.args, "filter", "")),
-                    'config': read_payload(raw_cfg),
-                    'source': getattr(self.args, "source", "") or "running",
-                    'target_datastore': getattr(self.args, "target_datastore", None) or getattr(self.args, "target", "candidate"),
-                    'default_operation': getattr(self.args, "default_operation", "merge"),
-                    'error_option': getattr(self.args, "error_option", "stop-on-error"),
-                    'test_option': getattr(self.args, "test_option", None),
-                    'commit': getattr(self.args, "commit", True),
-                    'device': getattr(self.args, "device", "default"),
-                    'nc_xpath': getattr(self.args, "nc_xpath", []) or [],
-                    'version': getattr(self.args, "version", ""),
-                    'identifier': getattr(self.args, "identifier", ""),
-                    'schema_format': getattr(self.args, "schema_format", "yang"),
-                })
+                proto_enum = Protocol.NETCONF
+                if operation in ('capability', 'capabilities'):
+                    op_obj = CapabilitiesOperation()
+                elif operation in ('get', 'get-config'):
+                    raw_filter = read_payload(getattr(self.args, "filter", ""))
+                    nc_xpath = getattr(self.args, "nc_xpath", []) or []
+                    if raw_filter:
+                        filter_type = "subtree" if raw_filter.strip().startswith('<') else "xpath"
+                        selector = FilterSelector(expression=raw_filter, filter_type=filter_type)
+                    elif nc_xpath:
+                        selector = PathSelector(paths=tuple(nc_xpath))
+                    elif paths:
+                        selector = PathSelector(paths=tuple(paths))
+                    else:
+                        selector = PathSelector(paths=())
+
+                    source = getattr(self.args, "source", "") or "running"
+                    read_scope = "config" if operation == "get-config" else "all"
+                    op_obj = GetOperation(
+                        selector=selector,
+                        read_scope=read_scope,
+                        protocol_options=NetconfOptions(source=source)
+                    )
+                elif operation in ('get-schema', 'get_schema'):
+                    identifier = getattr(self.args, "identifier", "")
+                    if not identifier and paths:
+                        identifier = paths[0]
+                    version = getattr(self.args, "version", "")
+                    schema_format = getattr(self.args, "schema_format", "yang")
+                    op_obj = GetSchemaOperation(
+                        identifier=identifier,
+                        version=version or None,
+                        format=schema_format
+                    )
+                elif operation in ('edit-config', 'edit_config', 'set'):
+                    raw_cfg = getattr(self.args, "config", "") or getattr(self.args, "nc_config", "")
+                    config_payload = read_payload(raw_cfg)
+                    target_ds = getattr(self.args, "target_datastore", None) or getattr(self.args, "target", "candidate")
+                    default_op = getattr(self.args, "default_operation", "merge")
+                    error_opt = getattr(self.args, "error_option", "stop-on-error")
+                    test_opt = getattr(self.args, "test_option", None)
+                    commit_val = getattr(self.args, "commit", True)
+
+                    nc_opts = NetconfOptions(
+                        target_datastore=target_ds,
+                        config=config_payload,
+                        default_operation=default_op,
+                        error_option=error_opt,
+                        test_option=test_opt,
+                        commit=commit_val
+                    )
+                    op_obj = SetOperation(
+                        changes=(),
+                        protocol_options=nc_opts
+                    )
+                elif operation == 'subscribe':
+                    raw_filter = read_payload(getattr(self.args, "filter", ""))
+                    stream_name = getattr(self.args, "stream_name", "NETCONF")
+                    selector = FilterSelector(expression=raw_filter, filter_type="subtree") if raw_filter else PathSelector(paths=())
+                    op_obj = SubscribeOperation(
+                        selector=selector,
+                        delivery=DeliveryPolicy(mode=DeliveryMode.PERIODIC),
+                        subscription_name=stream_name
+                    )
+                else:
+                    raise ValueError(f"Unknown NETCONF operation: {operation}")
             else:
                 raise ValueError(f"Unknown protocol: {protocol}")
 
-            session = create_session_config(protocol, operation, **params)
+            session = SessionConfig(
+                connection=conn,
+                protocol=proto_enum,
+                operation=op_obj,
+                execution=exec_cfg
+            )
             sessions.append(session)
 
         return ParsedConfig(
@@ -582,10 +709,11 @@ class FileConfigBuilder(ConfigBuilder):
         global_cfg = d.get('global', {})
 
         # global_operation = global_cfg.get('operation', 'subscribe')
-        global_username = global_cfg.get('username', '')
-        global_password = global_cfg.get('password', '')
-        global_times = global_cfg.get('times', 1)
-        global_insecure = global_cfg.get('insecure', False)
+        global_username = global_cfg.get('username', d.get('username', ''))
+        global_password = global_cfg.get('password', d.get('password', ''))
+        global_times = global_cfg.get('times', d.get('times', 1))
+        global_insecure = global_cfg.get('insecure', d.get('insecure', False))
+        global_protocol = global_cfg.get('protocol', d.get('protocol', self.protocol))
         global_sec_cfg = global_cfg.get('security', {})
         global_security = SecurityProfile(
             tls_ca=global_sec_cfg.get('tls_ca', ''),
@@ -614,7 +742,7 @@ class FileConfigBuilder(ConfigBuilder):
             t_username = tgt_info.get('username', global_username)
             t_password = tgt_info.get('password', global_password)
             t_times = tgt_info.get('times', global_times)
-            t_protocol = tgt_info.get('protocol', self.protocol) or 'gnmi'
+            t_protocol = tgt_info.get('protocol', global_protocol) or 'gnmi'
             t_insecure = tgt_info.get('insecure', global_insecure)
 
             # possible Get, Set, Subscribe list
@@ -626,15 +754,63 @@ class FileConfigBuilder(ConfigBuilder):
             t_set_block = tgt_info.get('set', {})
             t_op = (tgt_info.get('operation', '') or tgt_info.get('type', '')).lower()
 
-            # For simplicity, there's only one type of RPC is allowed
-            if len(t_sub_list): tgt_cnt += 1
-            if len(t_get_list): tgt_cnt += 1
-            if len(t_update_list) or len(t_replace_list) or len(t_delete_list) or t_set_block or t_op == 'set': tgt_cnt += 1
+            t_raw_filter = tgt_info.get('filter', '')
+            t_raw_config = tgt_info.get('config') or tgt_info.get('nc_config')
+            if isinstance(t_set_block, dict) and not t_raw_config:
+                t_raw_config = t_set_block.get('config') or t_set_block.get('nc_config')
 
+            is_capability = t_op in ('capability', 'capabilities')
+            is_get_schema = t_op in ('get-schema', 'get_schema') or bool(tgt_info.get('identifier'))
+            is_subscribe = len(t_sub_list) > 0
+            is_get = len(t_get_list) > 0 or t_op in ('get', 'get-config', 'get_config') or bool(t_raw_filter)
+            is_set = (
+                len(t_update_list) > 0 or len(t_replace_list) > 0 or len(t_delete_list) > 0
+                or bool(t_set_block) or t_op in ('set', 'edit-config', 'edit_config')
+                or bool(t_raw_config)
+            )
+
+            # Avoid collision if is_set was triggered by default but is_capability or is_get_schema or is_subscribe or is_get matches
+            if is_capability or is_get_schema or is_subscribe or is_get:
+                if not (len(t_update_list) > 0 or len(t_replace_list) > 0 or len(t_delete_list) > 0 or bool(t_set_block) or bool(t_raw_config) or t_op in ('set', 'edit-config', 'edit_config')):
+                    is_set = False
+
+            tgt_cnt = sum([1 for flag in [is_capability, is_get_schema, is_subscribe, is_get, is_set] if flag])
             if tgt_cnt > 1:
                 raise FileConfigError(f"target {target_ip_port} holds two or more RPC types - only one type of RPC is allowed")
 
-            if len(t_sub_list): # Subscribe
+            conn = ConnectionConfig(
+                target=str(target_ip_port),
+                username=t_username,
+                password=t_password,
+                security=global_security,
+                insecure=t_insecure
+            )
+            proto_enum = Protocol.GNMI if t_protocol.lower() == 'gnmi' else Protocol.NETCONF
+
+            if is_capability:
+                op_obj = CapabilitiesOperation()
+                session = SessionConfig(
+                    connection=conn,
+                    protocol=proto_enum,
+                    operation=op_obj,
+                    execution=ExecutionConfig(times=t_times)
+                )
+                sessions.append(session)
+            elif is_get_schema:
+                ident = tgt_info.get('identifier') or (t_get_list[0] if t_get_list else '')
+                op_obj = GetSchemaOperation(
+                    identifier=ident,
+                    version=tgt_info.get('version'),
+                    format=tgt_info.get('format', 'yang') or 'yang'
+                )
+                session = SessionConfig(
+                    connection=conn,
+                    protocol=proto_enum,
+                    operation=op_obj,
+                    execution=ExecutionConfig(times=t_times)
+                )
+                sessions.append(session)
+            elif is_subscribe: # Subscribe
                 subs = d.get('subscriptions', {})
                 for sub_name in t_sub_list:
                     if sub_name not in subs:
@@ -645,7 +821,6 @@ class FileConfigBuilder(ConfigBuilder):
                     if 'update_only' in named_sub:
                         update_only = True
 
-                    # subscription in named sub 
                     sub_details = named_sub.get('subscription', {})
 
                     paths = sub_details.get('path', [])
@@ -654,68 +829,128 @@ class FileConfigBuilder(ConfigBuilder):
                     sub_mode = sub_details.get('mode', 'target_defined')
                     sample_interval = sub_details.get('sample_interval', 0)
 
-                    session = create_session_config(
-                        t_protocol,
-                        'subscribe',
-                        target=str(target_ip_port), # Convert in case YAML parses IP as float/int
-                        paths=paths,
+                    d_mode = DeliveryMode.SNAPSHOT if named_sub.get('mode') == 'once' else (
+                        DeliveryMode.POLL if named_sub.get('mode') == 'poll' else (
+                            DeliveryMode.ON_CHANGE if sub_mode == 'on_change' else DeliveryMode.PERIODIC
+                        )
+                    )
+                    del_policy = DeliveryPolicy(
+                        mode=d_mode,
+                        interval=sample_interval,
+                        heartbeat=0,
+                        suppress_redundant=False
+                    )
+                    op_obj = SubscribeOperation(
+                        selector=PathSelector(paths=tuple(paths), prefix=named_sub.get('prefix', '')),
+                        delivery=del_policy,
                         subscription_name=sub_name,
-                        operation='subscribe',
-                        prefix=named_sub.get('prefix', ''),
-                        encoding=named_sub.get('encoding', 'json_ietf'),
-                        protocol=t_protocol,
-                        insecure=t_insecure,
-                        username=t_username,
-                        password=t_password,
-                        times=t_times,
-                        security=global_security,
-                        mode=named_sub.get('mode', 'stream'),
-                        update_only=update_only,
-                        updates_only=update_only,
-                        sub_mode=sub_mode,
-                        stream_mode=sub_mode,
-                        sample_interval=sample_interval
+                        protocol_options=GNMIOptions(
+                            encoding=named_sub.get('encoding', 'json_ietf'),
+                            updates_only=update_only
+                        )
+                    )
+                    session = SessionConfig(
+                        connection=conn,
+                        protocol=proto_enum,
+                        operation=op_obj,
+                        execution=ExecutionConfig(times=t_times)
                     )
                     sessions.append(session)
-            elif len(t_get_list): # Get
-                paths = t_get_list
+            elif is_get: # Get / Get-Config
+                paths = t_get_list if t_get_list else tgt_info.get('paths', [])
                 if isinstance(paths, str):
                     paths = [paths]
 
-                session = create_session_config(
-                    t_protocol,
-                    'get',
-                    target=str(target_ip_port), # Convert in case YAML parses IP as float/int
-                    paths=paths,
-                    subscription_name=f'get-{time.time_ns()}',
-                    operation='get',
-                    prefix=tgt_info.get('prefix', ''),
-                    encoding=tgt_info.get('encoding', 'json_ietf'),
-                    protocol=t_protocol,
-                    insecure=t_insecure,
-                    username=t_username,
-                    password=t_password,
-                    times=t_times,
-                    security=global_security,
+                if t_raw_filter:
+                    filter_str = read_payload(t_raw_filter) if isinstance(t_raw_filter, str) else str(t_raw_filter)
+                    f_type = "subtree" if filter_str.strip().startswith('<') else "xpath"
+                    selector = FilterSelector(expression=filter_str, filter_type=f_type)
+                else:
+                    selector = PathSelector(paths=tuple(paths), prefix=tgt_info.get('prefix', ''))
+
+                read_scope = 'config' if t_op in ('get-config', 'get_config') else 'all'
+                if proto_enum == Protocol.NETCONF:
+                    p_opts = NetconfOptions(source=tgt_info.get('source', 'running'))
+                else:
+                    p_opts = GNMIOptions(encoding=tgt_info.get('encoding', 'json_ietf'))
+
+                op_obj = GetOperation(
+                    selector=selector,
+                    read_scope=read_scope,
+                    protocol_options=p_opts
+                )
+                session = SessionConfig(
+                    connection=conn,
+                    protocol=proto_enum,
+                    operation=op_obj,
+                    execution=ExecutionConfig(times=t_times)
                 )
                 sessions.append(session)
-                
-            else: # Set
-                updates = []
-                replaces = []
-                deletes = []
-                set_prefix = tgt_info.get('prefix', '')
-                set_encoding = tgt_info.get('encoding', 'json_ietf')
+            else: # Set / Edit-Config
+                if proto_enum == Protocol.NETCONF and t_raw_config:
+                    cfg_payload = read_payload(t_raw_config) if isinstance(t_raw_config, str) else str(t_raw_config)
+                    nc_opts = NetconfOptions(
+                        target_datastore=tgt_info.get('target_datastore', 'candidate'),
+                        config=cfg_payload,
+                        default_operation=tgt_info.get('default_operation', 'merge'),
+                        error_option=tgt_info.get('error_option', 'stop-on-error'),
+                        test_option=tgt_info.get('test_option'),
+                        commit=tgt_info.get('commit', True)
+                    )
+                    op_obj = SetOperation(
+                        changes=(),
+                        protocol_options=nc_opts
+                    )
+                else:
+                    updates = []
+                    replaces = []
+                    deletes = []
+                    set_prefix = tgt_info.get('prefix', '')
+                    set_encoding = tgt_info.get('encoding', 'json_ietf')
 
-                if t_set_block and isinstance(t_set_block, dict):
-                    set_prefix = t_set_block.get('prefix', set_prefix)
-                    set_encoding = t_set_block.get('encoding', set_encoding)
+                    if t_set_block and isinstance(t_set_block, dict):
+                        set_prefix = t_set_block.get('prefix', set_prefix)
+                        set_encoding = t_set_block.get('encoding', set_encoding)
 
-                    upd_val = t_set_block.get('update', {})
-                    if isinstance(upd_val, dict):
-                        updates.extend(list(upd_val.items()))
-                    elif isinstance(upd_val, list):
-                        for item in upd_val:
+                        upd_val = t_set_block.get('update', {})
+                        if isinstance(upd_val, dict):
+                            updates.extend(list(upd_val.items()))
+                        elif isinstance(upd_val, list):
+                            for item in upd_val:
+                                if isinstance(item, (tuple, list)) and len(item) == 2:
+                                    updates.append(tuple(item))
+                                elif isinstance(item, dict):
+                                    updates.extend(list(item.items()))
+                                elif isinstance(item, str) and ':::' in item:
+                                    p, v = item.split(':::', 1)
+                                    updates.append((p.strip(), v.strip()))
+                                else:
+                                    updates.append((item, ""))
+
+                        rep_val = t_set_block.get('replace', {})
+                        if isinstance(rep_val, dict):
+                            replaces.extend(list(rep_val.items()))
+                        elif isinstance(rep_val, list):
+                            for item in rep_val:
+                                if isinstance(item, (tuple, list)) and len(item) == 2:
+                                    replaces.append(tuple(item))
+                                elif isinstance(item, dict):
+                                    replaces.extend(list(item.items()))
+                                elif isinstance(item, str) and ':::' in item:
+                                    p, v = item.split(':::', 1)
+                                    replaces.append((p.strip(), v.strip()))
+                                else:
+                                    replaces.append((item, ""))
+
+                        del_val = t_set_block.get('delete', [])
+                        if isinstance(del_val, str):
+                            deletes.append(del_val)
+                        elif isinstance(del_val, list):
+                            deletes.extend(del_val)
+
+                    if t_update_list:
+                        items = t_update_list if isinstance(t_update_list, list) else [t_update_list]
+                        for item in items:
                             if isinstance(item, (tuple, list)) and len(item) == 2:
                                 updates.append(tuple(item))
                             elif isinstance(item, dict):
@@ -726,11 +961,9 @@ class FileConfigBuilder(ConfigBuilder):
                             else:
                                 updates.append((item, ""))
 
-                    rep_val = t_set_block.get('replace', {})
-                    if isinstance(rep_val, dict):
-                        replaces.extend(list(rep_val.items()))
-                    elif isinstance(rep_val, list):
-                        for item in rep_val:
+                    if t_replace_list:
+                        items = t_replace_list if isinstance(t_replace_list, list) else [t_replace_list]
+                        for item in items:
                             if isinstance(item, (tuple, list)) and len(item) == 2:
                                 replaces.append(tuple(item))
                             elif isinstance(item, dict):
@@ -741,61 +974,32 @@ class FileConfigBuilder(ConfigBuilder):
                             else:
                                 replaces.append((item, ""))
 
-                    del_val = t_set_block.get('delete', [])
-                    if isinstance(del_val, str):
-                        deletes.append(del_val)
-                    elif isinstance(del_val, list):
-                        deletes.extend(del_val)
+                    if t_delete_list:
+                        if isinstance(t_delete_list, str):
+                            deletes.append(t_delete_list)
+                        elif isinstance(t_delete_list, list):
+                            deletes.extend(t_delete_list)
 
-                if t_update_list:
-                    items = t_update_list if isinstance(t_update_list, list) else [t_update_list]
-                    for item in items:
-                        if isinstance(item, (tuple, list)) and len(item) == 2:
-                            updates.append(tuple(item))
-                        elif isinstance(item, dict):
-                            updates.extend(list(item.items()))
-                        elif isinstance(item, str) and ':::' in item:
-                            p, v = item.split(':::', 1)
-                            updates.append((p.strip(), v.strip()))
-                        else:
-                            updates.append((item, ""))
+                    changes = []
+                    for p, v in updates:
+                        changes.append(Change(path=p, operation=ChangeType.MERGE, value=v))
+                    for p, v in replaces:
+                        changes.append(Change(path=p, operation=ChangeType.REPLACE, value=v))
+                    for d_p in deletes:
+                        changes.append(Change(path=d_p, operation=ChangeType.DELETE, value=None))
 
-                if t_replace_list:
-                    items = t_replace_list if isinstance(t_replace_list, list) else [t_replace_list]
-                    for item in items:
-                        if isinstance(item, (tuple, list)) and len(item) == 2:
-                            replaces.append(tuple(item))
-                        elif isinstance(item, dict):
-                            replaces.extend(list(item.items()))
-                        elif isinstance(item, str) and ':::' in item:
-                            p, v = item.split(':::', 1)
-                            replaces.append((p.strip(), v.strip()))
-                        else:
-                            replaces.append((item, ""))
+                    p_opts = GNMIOptions(encoding=set_encoding) if proto_enum == Protocol.GNMI else NetconfOptions()
+                    op_obj = SetOperation(
+                        changes=tuple(changes),
+                        prefix=set_prefix,
+                        protocol_options=p_opts
+                    )
 
-                if t_delete_list:
-                    if isinstance(t_delete_list, str):
-                        deletes.append(t_delete_list)
-                    elif isinstance(t_delete_list, list):
-                        deletes.extend(t_delete_list)
-
-                session = create_session_config(
-                    t_protocol,
-                    'set',
-                    target=str(target_ip_port), # Convert in case YAML parses IP as float/int
-                    subscription_name=f'set-{time.time_ns()}',
-                    prefix=set_prefix,
-                    operation='set',
-                    encoding=set_encoding,
-                    protocol=t_protocol,
-                    insecure=t_insecure,
-                    username=t_username,
-                    password=t_password,
-                    times=t_times,
-                    security=global_security,
-                    updates=updates,
-                    replaces=replaces,
-                    deletes=deletes,
+                session = SessionConfig(
+                    connection=conn,
+                    protocol=proto_enum,
+                    operation=op_obj,
+                    execution=ExecutionConfig(times=t_times)
                 )
                 sessions.append(session)
 

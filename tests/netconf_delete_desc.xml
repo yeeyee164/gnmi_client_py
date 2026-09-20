@@ -1,0 +1,10 @@
+<interfaces xmlns="http://openconfig.net/yang/interfaces" xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <interface>
+    <name>mgmt0</name>
+    <config>
+      <name>mgmt0</name>
+      <description nc:operation="delete"/>
+    </config>
+  </interface>
+</interfaces>
+

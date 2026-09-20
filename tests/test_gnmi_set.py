@@ -12,7 +12,8 @@ from specs.client import GNMIClient
 from managers.unary_worker import SetWorker
 from modules.validate import GNMIValidator, PathValidationError
 from modules.formatter import GNMIFormatter
-from ui.cmd import build_args, CLIConfigBuilder, FileConfigBuilder, GNMISetConfig, create_session_config
+from ui.cmd import build_args, CLIConfigBuilder, FileConfigBuilder, GNMISetConfig, create_session_config, SessionConfig
+from config.operations import SetOperation
 
 
 class TestGNMITypedValueAndSetRequest(unittest.TestCase):
@@ -190,7 +191,8 @@ class TestGNMISetCIParsing(unittest.TestCase):
 
         self.assertEqual(len(parsed.sessions), 1)
         session = parsed.sessions[0]
-        self.assertIsInstance(session, GNMISetConfig)
+        self.assertIsInstance(session, SessionConfig)
+        self.assertIsInstance(session.operation, SetOperation)
         self.assertEqual(session.prefix, "/openconfig-interfaces:interfaces")
         self.assertEqual(len(session.updates), 1)
         self.assertEqual(session.updates[0][0], 'interface[name="Ethernet8"]/config')

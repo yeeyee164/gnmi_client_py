@@ -6,7 +6,9 @@ from unittest.mock import MagicMock, patch
 # Ensure project root directory is in sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from ui.cmd import NetconfEditConfig, CLIConfigBuilder, parse_args
+from ui.cmd import parse_args
+from config.model import SessionConfig
+from config.operations import SetOperation
 from specs.client import NetconfClient
 from modules.formatter import NETCONFFormatter
 
@@ -60,7 +62,7 @@ class TestNetconfEditConfig(unittest.TestCase):
             self.assertIsNone(result['error'])
 
     def test_cli_parser_netconf_edit_config(self):
-        """Verify CLI parsing produces NetconfEditConfig session config."""
+        """Verify CLI parsing produces SessionConfig with SetOperation."""
         parsed = parse_args([
             "-t", "10.1.11.101:830",
             "--username", "admin",
@@ -73,7 +75,8 @@ class TestNetconfEditConfig(unittest.TestCase):
         ])
         self.assertEqual(len(parsed.sessions), 1)
         cfg = parsed.sessions[0]
-        self.assertIsInstance(cfg, NetconfEditConfig)
+        self.assertIsInstance(cfg, SessionConfig)
+        self.assertIsInstance(cfg.operation, SetOperation)
         self.assertEqual(cfg.target, "10.1.11.101:830")
         self.assertEqual(cfg.target_datastore, "running")
         self.assertEqual(cfg.config, "<test/>")

@@ -17,7 +17,8 @@ if __name__ == '__main__':
     setup_logger(log_level=log_level, syslog_server=cfg.syslog_server, log_file=cfg.log_file)
 
     logger = logging.getLogger(__name__)
-    logger.info(f"Initializing {args.protocol.upper()} Client engine...")
+    proto_name = args.protocol.upper() if getattr(args, 'protocol', None) else (cfg.sessions[0].protocol.value.upper() if cfg.sessions else "Universal")
+    logger.info(f"Initializing {proto_name} Client engine...")
     logger.debug(f"Configuration loaded: sessions({len(cfg.sessions)})")
 
     if args.debug:

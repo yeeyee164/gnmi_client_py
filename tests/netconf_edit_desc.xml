@@ -1,0 +1,10 @@
+<interfaces xmlns="http://openconfig.net/yang/interfaces">
+  <interface>
+    <name>mgmt0</name>
+    <config>
+      <name>mgmt0</name>
+      <description>NETCONF-CLI-Test</description>
+    </config>
+  </interface>
+</interfaces>
+

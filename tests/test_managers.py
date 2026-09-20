@@ -57,6 +57,21 @@ from ui.cmd import (
     NetconfSessionConfig,
     ParsedConfig,
 )
+from config import (
+    Protocol,
+    ConnectionConfig,
+    ExecutionConfig,
+    PathSelector,
+    FilterSelector,
+    DeliveryMode,
+    DeliveryPolicy,
+    CapabilitiesOperation,
+    GetOperation,
+    SetOperation,
+    SubscribeOperation,
+    Change,
+    ChangeType,
+)
 from managers.manager import BaseRPCManager, UnaryManager, SubscriptionManager, ManagerFactory
 from managers.unary_worker import BaseUnaryWorker, GetWorker, SetWorker, CapabilityWorker
 from managers.subscribe_session import SubscribeSession
@@ -271,9 +286,84 @@ class TestPerRPCSessionConfigHierarchy(unittest.TestCase):
         self.assertEqual(sub_cfg.stream_name, "NETCONF")
 
     def test_backward_compatibility_aliases(self):
-        self.assertIs(SessionConfig, BaseSessionConfig)
         self.assertIs(GNMISessionConfig, BaseSessionConfig)
         self.assertIs(NetconfSessionConfig, BaseSessionConfig)
+
+
+class TestSemanticManagerSessionScoping(unittest.TestCase):
+    def setUp(self):
+        conn1 = ConnectionConfig(target='10.0.0.1:9339')
+        conn2 = ConnectionConfig(target='10.0.0.2:9339')
+        conn3 = ConnectionConfig(target='10.0.0.3:9339')
+        conn4 = ConnectionConfig(target='10.0.0.4:9339')
+        conn5 = ConnectionConfig(target='10.0.0.5:9339')
+        conn6 = ConnectionConfig(target='10.0.0.6:9339')
+
+        self.get_1 = SessionConfig(
+            connection=conn1, protocol=Protocol.GNMI,
+            operation=GetOperation(selector=PathSelector(paths=['/interfaces/interface[name=eth0]']))
+        )
+        self.get_2 = SessionConfig(
+            connection=conn2, protocol=Protocol.GNMI,
+            operation=GetOperation(selector=PathSelector(paths=['/system/config']))
+        )
+        self.set_1 = SessionConfig(
+            connection=conn3, protocol=Protocol.GNMI,
+            operation=SetOperation(changes=[Change(path='/system/config/hostname', operation=ChangeType.MERGE, value='router3')])
+        )
+        self.cap_1 = SessionConfig(
+            connection=conn4, protocol=Protocol.GNMI,
+            operation=CapabilitiesOperation()
+        )
+        self.sub_1 = SessionConfig(
+            connection=conn5, protocol=Protocol.GNMI,
+            operation=SubscribeOperation(
+                selector=PathSelector(paths=['/interfaces/...']),
+                delivery=DeliveryPolicy(mode=DeliveryMode.PERIODIC),
+                subscription_name='sub_telemetry'
+            )
+        )
+        self.sub_2 = SessionConfig(
+            connection=conn6, protocol=Protocol.GNMI,
+            operation=SubscribeOperation(
+                selector=PathSelector(paths=['/components/...']),
+                delivery=DeliveryPolicy(mode=DeliveryMode.POLL),
+                subscription_name='sub_poll'
+            )
+        )
+        self.all_sessions = [self.get_1, self.get_2, self.set_1, self.cap_1, self.sub_1, self.sub_2]
+        self.parsed_config = ParsedConfig(
+            sessions=self.all_sessions,
+            outputs={'out': {'type': 'file', 'file-type': 'stdout', 'format': 'json'}},
+            targets=['10.0.0.1:9339', '10.0.0.2:9339', '10.0.0.3:9339', '10.0.0.4:9339', '10.0.0.5:9339', '10.0.0.6:9339']
+        )
+
+    def test_semantic_manager_factory_partitioning(self):
+        managers, handlers = ManagerFactory.create_managers(self.parsed_config)
+        self.assertEqual(len(managers), 2)
+        self.assertIsInstance(managers[0], UnaryManager)
+        self.assertIsInstance(managers[1], SubscriptionManager)
+        self.assertEqual(len(managers[0].session_configs), 4)
+        self.assertEqual(len(managers[1].session_configs), 2)
+
+    def test_semantic_unary_manager_dispatch(self):
+        unary_sessions = [self.get_1, self.set_1, self.cap_1]
+        mgr = UnaryManager(sessions=unary_sessions, output_handlers=[MagicMock()])
+        mgr.build_sessions()
+        self.assertEqual(len(mgr.sessions), 3)
+        self.assertIsInstance(mgr.sessions[0], GetWorker)
+        self.assertIsInstance(mgr.sessions[1], SetWorker)
+        self.assertIsInstance(mgr.sessions[2], CapabilityWorker)
+
+    def test_semantic_subscription_manager_dispatch(self):
+        sub_sessions = [self.sub_1, self.sub_2]
+        mgr = SubscriptionManager(sessions=sub_sessions, output_handlers=[MagicMock()])
+        mgr.build_sessions()
+        self.assertEqual(len(mgr.sessions), 2)
+        self.assertIsInstance(mgr.sessions[0], SubscribeSession)
+        self.assertIsInstance(mgr.sessions[1], SubscribeSession)
+        self.assertFalse(mgr.sessions[0].is_poll_mode())
+        self.assertTrue(mgr.sessions[1].is_poll_mode())
 
 
 if __name__ == '__main__':

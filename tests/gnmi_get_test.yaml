@@ -1,0 +1,17 @@
+protocol: "gnmi"
+insecure: true
+
+targets:
+  172.20.20.2:57401:
+    username: "admin"
+    password: "NokiaSrl1!"
+    get-path:
+      - "openconfig:/system/state/hostname"
+      - "openconfig:/interfaces/interface[name=mgmt0]/state/oper-status"
+
+outputs:
+  default_output:
+    type: file
+    file-type: stdout
+    format: json
+
