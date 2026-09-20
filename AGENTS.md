@@ -57,8 +57,7 @@ Familiarize yourself with the workspace layout before making any modifications:
 │   └── validate.py               \# ValidatorFactory  
 └── util/  
     ├── \_\_init\_\_.py  
-    ├── utils.py                  \# IP address validation and string sanitation  
-    └── encoding.py               \# String/bytes encoding utilities  
+    └── utils.py                  \# Defines utility functions for every python modules 
 ```
 
 ## 3. Project Initialization and Environment Setup
@@ -66,14 +65,14 @@ Familiarize yourself with the workspace layout before making any modifications:
 Before executing tasks, verify the virtual environment and required dependencies:
 
 ### Prerequisites & Dependencies
-* Python 3.9+ (Python 3.10+ recommended)
+* Python 3.10+ (Python 3.10+ recommended)
 * System C-libraries for SSH and XML manipulation (libxml2-dev, libxslt1-dev, libffi-dev)
 
 ### Setup commands
 
 ```bash
 # 1. activate virtual environment(optional)
-py310venv
+cat $HOME/.bashrc | grep venv 
 
 # 2. Upgrade core tooling
 pip install --upgrade pip setuptools wheel
