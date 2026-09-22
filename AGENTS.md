@@ -4,6 +4,7 @@
 - **Core architecture and data flow:** [`core_architecture_and_data_flow.md`](.agents/custom/core_architecture_and_data_flow.md)
 - **NETCONF client milestone:** [`milestone_netconf.md`](.agents/custom/milestone_netconf.md)
 - **Coding & Protocol Rules:** [`RULES.md`](.agents/rules/RULES.md)
+- **documents:** [`docs`](./docs)
 
 ## **1\. Project Background & System Identity**
 
@@ -20,7 +21,7 @@ This project is an enterprise-grade, protocol-agnostic Northbound (NB) network a
 The engine supports dual execution paradigms:
 
 * **Nested CLI Subparsers:** client\_main.py \<protocol\> \<operation\> \[options\]  
-* **Hierarchical YAML Configuration:** client\_main.py \-c config.yaml (supporting multi-target, multi-subscription, and multi-operation orchestration).
+* **Hierarchical YAML Configuration:** client\_main.py \[gnmi\/netconf\] \-c config.yaml (supporting multi-target, multi-subscription, and multi-operation orchestration).
 
 ## **2\. Directory Layout**
 
@@ -29,35 +30,60 @@ Familiarize yourself with the workspace layout before making any modifications:
 ### 2.1 Directory Layout
 
 ```text
-.  
-├── client\_main.py                \# Universal CLI entrypoint and orchestrator launcher  
-├── ui/  
-│   ├── \_\_init\_\_.py  
-│   └── cmd.py                    \# Nested CLI subparsers & YAML parser (outputs SessionConfig instances)  
-├── managers/  
-│   ├── \_\_init\_\_.py  
-│   ├── manager.py                \# ManagerFactory, UnaryManager (ThreadPool), SubscriptionManager (Streaming)  
-│   ├── factory.py                \# ClientFactory (instantiates BaseClient implementations)  
-│   ├── unary\_worker.py           \# Universal Unary Workers (GetWorker, SetWorker, CapabilitiesWorker)  
-│   └── subscribe\_session.py      \# Universal streaming/poll session worker thread  
-├── specs/  
-│   ├── \_\_init\_\_.py  
-│   ├── base\_client.py            \# BaseClient ABC (\_\_enter\_\_, \_\_exit\_\_, get, set, subscribe, capabilities)  
-│   ├── client.py                 \# GNMIClient (implements BaseClient using grpcio), NETCONFCLient (implements BaseClient using ncclient)
-│   ├── base\_validator.py         \# BaseValidator ABC for offline syntax/semantic checks  
-│   ├── gnmi\_validator.py         \# GNMI path validation (wildcard checks, OpenConfig syntax)  
-│   └── netconf\_rpc\_design.md     \# Detailed architectural mapping for NETCONF RPCs  
-├── modules/  
-│   ├── \_\_init\_\_.py  
-│   ├── security.py               \# SecurityProfile dataclass & TLSProfile (x509, SSH keys, SAN overrides)  
-│   ├── formatter.py              \# ProtocolFormatter, GNMIFormatter, NETCONFFormatter (xmltodict, minidom)  
-│   ├── output.py                 \# OutputHandler (routes structured telemetry to stdout, stderr, or files)  
-│   ├── logger.py                 \# Centralized logging module (Console, Syslog RFC 5424, file logging)  
-│   ├── path.py                   \# Path parsing utilities  
-│   └── validate.py               \# ValidatorFactory  
-└── util/  
-    ├── \_\_init\_\_.py  
-    └── utils.py                  \# Defines utility functions for every python modules 
+.
+├── client_main.py                       # Universal CLI entrypoint and orchestrator launcher 
+├── config
+│   ├── __init__.py
+│   ├── delivery.py                      # defines fields for specific protocol 
+│   ├── model.py                         # divides SessionConfig into three classes: ConnectionConfig, ExecutionConfig and OperationConfig
+│   ├── operations.py                    # define RPC based classes
+│   ├── protocol_options                 # optional contents for each protocol
+│   │   ├── __init__.py
+│   │   ├── gnmi.py
+│   │   └── netconf.py
+│   └── selectors.py                     # define path(gNMI, RESTCONF), filter(NETCONF) selector
+├── docs                                 # document markdown currently proceed so far
+│   ├── gNMI_Set.md
+│   ├── netconf_phase2_prompt.md
+│   ├── semantic_configuration_refactor_report_procedure.md
+│   └── session_config_RPC_separation.md
+├── managers
+│   ├── __init__.py
+│   ├── factory.py                      # ClientFactory (instantiates BaseClient implementations)
+│   ├── manager.py                      # ManagerFactory, UnaryManager (ThreadPool), SubscriptionManager (Streaming)
+│   ├── subscribe_session.py            # SubscriptionManager manages RPC that needs to sustain session
+│   └── unary_worker.py                 # UnaryManager manages Unary RPCs which doesn't need to sustain session
+├── modules
+│   ├── __init__.py
+│   ├── formatter.py                    # ProtocolFormatter, GNMIFormatter, NETCONFFormatter (xmltodict, minidom) 
+│   ├── logger.py                       # Centralized logging module (Console, Syslog RFC 5424, file logging)  
+│   ├── output.py                       # OutputHandler (routes structured telemetry to stdout, stderr, or files)
+│   ├── path.py                         # validating gNMI Path information
+│   ├── path_test.py
+│   ├── security.py                     # SecurityProfile dataclass & SecurityModule class
+│   └── validate.py                     # define validating logics
+├── protos
+│   └── gnmi                            # gNMI and gRPC tunnel definition
+│       ├── gnmi.proto
+│       ├── gnmi_ext.proto
+│       └── tunnel.proto
+├── request_exp_named_sub.yaml
+├── specs
+│   ├── __init__.py
+│   ├── base_client.py                  # abstract protocol layer for NorthBound client RPC
+│   ├── base_validator.py               # specify base validator classes
+│   ├── client.py                       # specify all classes for each client module
+│   ├── gnmi                            # gNMI protocol buffer stub code
+│   ├── gnmi_client.py                  # gNMI Client module that implements BaseClass
+│   ├── gnmi_validator.py               # simple validator of gNMI Client module
+│   └── netconf_client.py               # NETCONF Client module that implements BaseClass
+├── tests                               # where the unit tests are resided
+├── ui
+│   ├── __init__.py
+│   └── cmd.py       # Nested Command line and YAML parser (outputs are list of BaseSessionConfig inside of ParsedConfig)
+└── util
+    ├── __init__.py
+    └── utils.py     # Defines utility functions for every python modules 
 ```
 
 ## 3. Project Initialization and Environment Setup
@@ -78,7 +104,7 @@ cat $HOME/.bashrc | grep venv
 pip install --upgrade pip setuptools wheel
 
 # 3. Install Python dependencies
-pip install grpcio grpcio-tools ncclient xmltodict pyyaml lxml
+pip install grpcio grpcio-tools ncclient xmltodict pyyaml lxml pytest
 
 # 4. Verify CLI entrypoint
 python client_main.py --help
