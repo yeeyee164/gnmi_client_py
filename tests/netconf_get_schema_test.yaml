@@ -10,7 +10,7 @@ targets:
 
 outputs:
   default_output:
-    type: file
-    file-type: stdout
-    format: json
+    output-type: file
+    path: "./tests/openconfig-interfaces.yang"
+    format: text
 

@@ -31,7 +31,7 @@ class BaseClient(ABC):
 
     def execute_capabilities(self, operation: CapabilitiesOperation) -> Any:
         """Executes capabilities discovery based on CapabilitiesOperation."""
-        return self.capability()
+        return NotImplementedError("execute_capabilities must be implemented by concrete client")
 
     def execute_get(self, operation: GetOperation) -> Any:
         """Executes a get/read operation based on GetOperation."""
@@ -48,32 +48,3 @@ class BaseClient(ABC):
     def execute_schema(self, operation: GetSchemaOperation) -> Any:
         """Executes schema retrieval based on GetSchemaOperation."""
         raise NotImplementedError("execute_schema must be implemented by concrete client")
-
-    # =========================================================================
-    # Legacy RPC Methods (Backward Compatibility)
-    # =========================================================================
-
-    def capability(self, **kwargs) -> Any:
-        pass
-
-    def get(self, **kwargs) -> Any:
-        """
-        Executes a read/fetch operation
-        Mapped to gNMI Get, NETCONF <get>/<get-config>, or RESTCONF GET
-        """
-        pass
-
-    def set(self, **kwargs) -> Any:
-        """
-        Executes a write/edit operation
-        Mapped to gNMI Set, NETCONF <edit-config> or RESTCONF PUT/POST/DELETE
-        """
-        pass
-
-    def subscribe(self, request_iterator: Any) -> Iterator[Any]:
-        """
-        Executes a long-lived telemetry of event notification subscription stream.
-        Mapped to gNMI Subscribe, NETCONF event notification, or RESTCONF SSE/Webhooks
-        """
-        pass
-

@@ -5,9 +5,27 @@ from modules.security import SecurityProfile
 from config.operations import OperationConfig
 
 class Protocol(str, Enum):
+    NONE = "none"
     GNMI = "gnmi"
     NETCONF = "netconf"
     RESTCONF = "restconf"
+
+class OutputType(str, Enum):
+    """
+    Define Output types
+    
+    Either `STDOUT` or `STDERR` direct to terminal.
+    Either `FILE` or `SYSLOG` require additional arguments.
+    """
+    STDOUT = "stdout"
+    STDERR = "stderr"
+    FILE = "file"
+    SYSLOG = "syslog"
+
+class OutputFormat(str, Enum):
+    JSON = "json"
+    XML = "xml"
+    TEXT = "text"
 
 @dataclass(frozen=True, kw_only=True)
 class ConnectionConfig:
@@ -57,17 +75,17 @@ class ConnectionConfig:
 @dataclass(frozen=True, kw_only=True)
 class ExecutionConfig:
     """Execution policies common to all operations."""
-    timeout: int = 30
-    retry_count: int = 0
-    times: int = 1
+    timeout: int = 30     # timeout value of for each RPC. It may denote TCP timeout.
+    retry_count: int = 0  # Retry count
+    times: int = 1        # If it has more than 1, it will spawn multiple requests with same information.
 
 @dataclass(frozen=True, kw_only=True)
 class SessionConfig:
     """Top-level session definition pairing connection, protocol, and intent."""
-    connection: ConnectionConfig
-    protocol: Protocol
-    operation: OperationConfig
-    execution: ExecutionConfig = field(default_factory=ExecutionConfig)
+    connection: ConnectionConfig       # connection part
+    protocol: Protocol                 # protocol session
+    operation: OperationConfig         # defined services of `protocol`
+    execution: ExecutionConfig = field(default_factory=ExecutionConfig) 
 
     @property
     def target(self) -> str:
@@ -172,3 +190,26 @@ class SessionConfig:
             return self.operation.subscription_name
         return "default"
 
+# ================
+# Output Classes
+# ================
+
+@dataclass(kw_only=True)
+class OutputConfig:
+    """Output specifier"""
+    output_type: OutputType
+    format: OutputFormat
+    name: str = 'default_output'
+
+    # Variant-specific fields
+    # Path is for `OutputType.FILE`
+    # syslog_* is for `OutputType.SYSLOG`
+    path: str | None = None
+    syslog_host: str | None = None
+    syslog_port: int | None = None
+
+    def __post_init__(self):
+        if self.output_type == OutputType.FILE and not self.path:
+            raise ValueError("path must be specified for FILE option")
+        if self.output_type == OutputType.SYSLOG and not self.syslog_host:
+            raise ValueError("syslog_host must be specified for SYSLOG option")

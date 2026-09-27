@@ -39,6 +39,9 @@ class Change:
     operation: ChangeType = ChangeType.MERGE
     value: Any = None
 
+    def __eq__(self, path_val:tuple):
+        return (self.path, self.operation, self.value) == path_val
+
 @dataclass(frozen=True, kw_only=True)
 class SetOperation(OperationConfig):
     """Mutation of configuration datastores."""

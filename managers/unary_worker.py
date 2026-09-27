@@ -92,6 +92,7 @@ class BaseUnaryWorker:
             'target': self.target,
             'rpc': rpc_name,
             'data': data,
+            'protocol': self.protocol,
         }
 
     def _get_client(self):

@@ -20,9 +20,12 @@ from modules.security import SecurityProfile
 from util.utils import read_payload
 from config.model import (
     Protocol,
+    OutputType,
+    OutputFormat,
     ConnectionConfig,
     ExecutionConfig,
     SessionConfig,
+    OutputConfig,
 )
 from config.selectors import (
     Selector,
@@ -52,263 +55,9 @@ class FileConfigError(Exception):
     """Custom exception raised when given config vlolates some criteria"""
     pass
 
-@dataclass(kw_only=True)
-class BaseSessionConfig:
-    """
-    Universal connection details shared across all protocols
-    """
-
-    target: str = ""
-    protocol: str = ""
-    username: str = ""
-    password: str = ""
-    security: SecurityProfile = field(default_factory=SecurityProfile)
-    # operation: str = ""
-
-    @property
-    def target_ip(self) -> str:
-        """Extract IP address or hostname from target, supporting IPv4, bracketed IPv6, and hostnames."""
-        if not self.target:
-            return ""
-        if self.target.startswith('['):
-            closing_bracket = self.target.find(']')
-            if closing_bracket != -1:
-                return self.target[1:closing_bracket]
-        if ':' in self.target:
-            parts = self.target.split(':')
-            if len(parts) == 2 and parts[1].isdigit():
-                return parts[0]
-        return self.target.strip('[]')
-
-    @property
-    def target_port(self) -> int:
-        """Extract port number from target, or return 0 if omitted."""
-        if not self.target:
-            return 0
-        if self.target.startswith('['):
-            closing_bracket = self.target.find(']')
-            if closing_bracket != -1 and closing_bracket < len(self.target) - 1:
-                remainder = self.target[closing_bracket + 1:]
-                if remainder.startswith(':'):
-                    try:
-                        return int(remainder[1:])
-                    except ValueError:
-                        return 0
-            return 0
-        if ':' in self.target:
-            parts = self.target.split(':')
-            if len(parts) == 2 and parts[1].isdigit():
-                return int(parts[1])
-        return 0
-
-
 # =====================================================================
-# Abstract Intermediate Dataclasses
+# Root config data class per incoming config
 # =====================================================================
-
-@dataclass(kw_only=True)
-class BaseCapabilitiesConfig(BaseSessionConfig):
-    """Abstract base for capabilities / hello RPCs."""
-    pass
-
-
-@dataclass(kw_only=True)
-class BaseGetConfig(BaseSessionConfig):
-    """Abstract base for retrieving operational state or configuration."""
-    pass
-
-
-@dataclass(kw_only=True)
-class BaseSetConfig(BaseSessionConfig):
-    """Abstract base for mutating or editing configuration."""
-    pass
-
-
-@dataclass(kw_only=True)
-class BaseSubscribeConfig(BaseSessionConfig):
-    """Abstract base for streaming telemetry or event notifications."""
-    subscription_name: str = "default"
-
-
-# =====================================================================
-# Concrete gNMI Dataclasses
-# =====================================================================
-
-@dataclass(kw_only=True)
-class GNMICapabilitiesConfig(BaseCapabilitiesConfig):
-    protocol: str = "gnmi"
-    operation: str = "capability"
-
-
-@dataclass(kw_only=True)
-class GNMIGetConfig(BaseGetConfig):
-    protocol: str = "gnmi"
-    operation: str = "get"
-    paths: List[str] = field(default_factory=list)
-    prefix: str = ""
-    encoding: str = "json_ietf"
-    type: str = ""
-    data_type: str = "all"
-
-    def __post_init__(self):
-        if self.type and not self.data_type:
-            self.data_type = self.type
-        elif self.data_type and not self.type:
-            self.type = self.data_type
-
-
-@dataclass(kw_only=True)
-class GNMISetConfig(BaseSetConfig):
-    protocol: str = "gnmi"
-    operation: str = "set"
-    updates: List[Tuple[str, Any]] = field(default_factory=list)
-    replaces: List[Tuple[str, Any]] = field(default_factory=list)
-    deletes: List[str] = field(default_factory=list)
-    prefix: str = ""
-    encoding: str = "json_ietf"
-
-
-
-@dataclass(kw_only=True)
-class GNMISubscribeConfig(BaseSubscribeConfig):
-    protocol: str = "gnmi"
-    operation: str = "subscribe"
-    paths: List[str] = field(default_factory=list)
-    prefix: str = ""
-    mode: str = "stream"            # stream, once, poll
-    stream_mode: str = "sample"     # sample, on_change, target_defined
-    sub_mode: Optional[str] = None
-    sample_interval: int = 0        # seconds
-    heartbeat_interval: int = 0
-    suppress_redundant: bool = False
-    encoding: str = "json_ietf"
-    updates_only: bool = False
-    update_only: bool = False
-
-    def __post_init__(self):
-        if self.sub_mode and not self.stream_mode:
-            self.stream_mode = self.sub_mode
-        elif self.stream_mode and not self.sub_mode:
-            self.sub_mode = self.stream_mode
-        if self.update_only and not self.updates_only:
-            self.updates_only = self.update_only
-        elif self.updates_only and not self.update_only:
-            self.update_only = self.updates_only
-
-
-# =====================================================================
-# Concrete NETCONF Dataclasses
-# =====================================================================
-
-@dataclass(kw_only=True)
-class NetconfCapabilitiesConfig(BaseCapabilitiesConfig):
-    protocol: str = "netconf"
-    operation: str = "capability"
-    device: str = "default"
-
-
-@dataclass(kw_only=True)
-class NetconfGetConfig(BaseGetConfig):
-    protocol: str = "netconf"
-    operation: str = "get"
-    source: str = "running"
-    filter: Optional[str] = None
-    nc_xpath: List[str] = field(default_factory=list)
-    identifier: Optional[str] = None
-    version: Optional[str] = None
-    schema_format: str = "yang"
-    with_defaults: Optional[str] = None
-    device: str = "default"
-
-
-@dataclass(kw_only=True)
-class NetconfEditConfig(BaseSetConfig):
-    protocol: str = "netconf"
-    operation: str = "edit-config"
-    target_datastore: str = "candidate"
-    config: Optional[str] = None
-    default_operation: str = "merge"
-    test_option: Optional[str] = None
-    error_option: str = "stop-on-error"
-    commit: bool = True
-    device: str = "default"
-    updates: Optional[list] = None
-    replaces: Optional[list] = None
-    deletes: Optional[list] = None
-
-
-@dataclass(kw_only=True)
-class NetconfSubscribeConfig(BaseSubscribeConfig):
-    protocol: str = "netconf"
-    operation: str = "subscribe"
-    stream_name: str = "NETCONF"
-    filter: Optional[str] = None
-    start_time: Optional[str] = None
-    stop_time: Optional[str] = None
-    device: str = "default"
-
-
-# Backward compatibility aliases
-GNMISessionConfig = BaseSessionConfig
-NetconfSessionConfig = BaseSessionConfig
-BaseSetSessionConfig = BaseSetConfig
-GNMISetSessionConfig = GNMISetConfig
-
-
-
-# =====================================================================
-# Session Config Registry & Factory Helper
-# =====================================================================
-
-SESSION_CONFIG_REGISTRY: Dict[Tuple[str, str], Type[BaseSessionConfig]] = {
-    # gNMI mappings
-    ("gnmi", "capability"): GNMICapabilitiesConfig,
-    ("gnmi", "capabilities"): GNMICapabilitiesConfig,
-    ("gnmi", "get"): GNMIGetConfig,
-    ("gnmi", "set"): GNMISetConfig,
-    ("gnmi", "subscribe"): GNMISubscribeConfig,
-    ("gnmi", "once"): GNMISubscribeConfig,
-    ("gnmi", "poll"): GNMISubscribeConfig,
-    ("gnmi", "stream"): GNMISubscribeConfig,
-
-    # NETCONF mappings
-    ("netconf", "capability"): NetconfCapabilitiesConfig,
-    ("netconf", "capabilities"): NetconfCapabilitiesConfig,
-    ("netconf", "get"): NetconfGetConfig,
-    ("netconf", "get-config"): NetconfGetConfig,
-    ("netconf", "get_config"): NetconfGetConfig,
-    ("netconf", "get-schema"): NetconfGetConfig,
-    ("netconf", "get_schema"): NetconfGetConfig,
-    ("netconf", "edit-config"): NetconfEditConfig,
-    ("netconf", "edit_config"): NetconfEditConfig,
-    ("netconf", "set"): NetconfEditConfig,
-    ("netconf", "subscribe"): NetconfSubscribeConfig,
-}
-
-
-def create_session_config(protocol: str = "", operation: str = "", /, **kwargs) -> BaseSessionConfig:
-    """Factory helper to safely instantiate specialized session configs."""
-    proto = kwargs.pop('protocol', None) or protocol or "gnmi"
-    op = kwargs.pop('operation', None) or operation or ""
-    norm_proto = proto.lower()
-    norm_op = op.lower()
-    key = (norm_proto, norm_op)
-    cls = SESSION_CONFIG_REGISTRY.get(key)
-    if not cls:
-        norm_op_dashed = norm_op.replace('_', '-')
-        cls = SESSION_CONFIG_REGISTRY.get((norm_proto, norm_op_dashed))
-    if not cls:
-        raise ValueError(f"No session config registered for protocol='{proto}' and operation='{op}'")
-
-    # Filter kwargs to only fields accepted by the target dataclass
-    valid_fields = {f.name for f in fields(cls)}
-    filtered_kwargs = {k: v for k, v in kwargs.items() if k in valid_fields}
-    if 'protocol' in valid_fields and 'protocol' not in filtered_kwargs:
-        filtered_kwargs['protocol'] = proto
-    if 'operation' in valid_fields and 'operation' not in filtered_kwargs:
-        filtered_kwargs['operation'] = op
-    return cls(**filtered_kwargs)
-
 
 @dataclass
 class ParsedConfig:
@@ -318,9 +67,9 @@ class ParsedConfig:
 
         And our management will use that for configure.
     """
-    sessions: List[BaseSessionConfig] # List of all individual sessions to spawn
-    outputs: Dict                 # Output definitions
+    sessions: List[SessionConfig] # List of all individual sessions to spawn
     targets: List[str] = field(default_factory=list) # List of "IP:PORT" strings
+    outputs: List[OutputConfig] = field(default_factory=list)  # Outputs definitions
     debug: bool = False           # Global debug flag
 
     # for logging this script
@@ -458,17 +207,9 @@ class CLIConfigBuilder(ConfigBuilder):
             print(f"[Config] times option should be positive integer. Ignore given value")
             times = 1
 
-        outputs = {
-            'default_output':{
-                'type': getattr(self.args, 'output_type', 'file'),
-                'file-type': getattr(self.args, 'output_file_type', 'stdout'),
-                'format': getattr(self.args, 'output_format', 'json'),
-            }
-        }
-
         if not getattr(self.args, 'protocol', None) or not getattr(self.args, 'operation', None):
             print("[CLI] Error: You must specify a protocol and an operation, or use a --config file.")
-            return ParsedConfig(sessions=[], outputs=outputs, debug=self.args.debug)
+            return ParsedConfig(sessions=[], debug=self.args.debug)
 
         targets = self.args.target or []
         protocol = self.args.protocol.lower()
@@ -678,6 +419,19 @@ class CLIConfigBuilder(ConfigBuilder):
             )
             sessions.append(session)
 
+        output_type = self.args.output_type or OutputType.STDOUT
+        output_format = self.args.output_format or OutputFormat.JSON
+        output_path = None
+
+        if output_type == OutputType.FILE:
+            output_path = self.args.output_path
+
+        outputs = [OutputConfig(
+            output_type = output_type,
+            format = output_format,
+            path = output_path,
+        )]
+
         return ParsedConfig(
             sessions=sessions,
             outputs=outputs,
@@ -725,16 +479,11 @@ class FileConfigBuilder(ConfigBuilder):
         )
         debug = global_cfg.get('debug', False)
         
-        # Output parsing
-        outputs = d.get('outputs', {
-            'default_output': {
-                'type': 'file',
-                'file-type': 'stdout',
-                'format': 'json'
-            }
-        })
-
         targets = d.get('targets', [])
+
+        if global_protocol != self.protocol:
+            raise FileConfigError(f"Given protocol is {global_protocol}, "
+                                  f"but user runs with protocol {self.protocol}")
 
         # targets in YAML
         for target_ip_port, tgt_info in targets.items():
@@ -1003,6 +752,24 @@ class FileConfigBuilder(ConfigBuilder):
                 )
                 sessions.append(session)
 
+        # Parsing outputs
+        outputs = []
+
+        output_group = d.get('outputs')
+        if output_group is None:
+            outputs.append(OutputConfig(
+                format = OutputFormat.JSON,
+                output_type = OutputType.STDOUT,
+            ))
+        else:
+            for og_name, og_item in output_group.items():
+                outputs.append(OutputConfig(
+                    name = og_name,
+                    format = OutputFormat(og_item['format']),
+                    output_type = OutputType(og_item['output-type']),
+                    path = og_item.get('path')
+                ))
+
         return ParsedConfig(
             sessions=sessions, targets=targets,
             outputs=outputs, debug=debug,
@@ -1024,8 +791,9 @@ def build_args(args=None) -> argparse.Namespace:
                         help="use insecure connection if set True")
 
     # output specifiers
-    parser.add_argument('--output-type', default='file', help="Type of output data.")
-    parser.add_argument('--output-file-type', default='stdout', help="direction of output data.")
+    parser.add_argument('--output-type', default='stdout', help="direction of output data.",
+                        choices=['file', 'stdout', 'stderr', 'syslog'])
+    parser.add_argument('--output-file', help="Specify path of file when `--output-type` is `file`")
     parser.add_argument('--output-format', default='json',
                         help="Specify output format.", choices=['json', 'text', 'xml'])
 

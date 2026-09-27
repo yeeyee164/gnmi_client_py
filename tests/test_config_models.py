@@ -9,6 +9,9 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from config import (
     Protocol,
+    OutputFormat,
+    OutputType,
+    OutputConfig,
     ConnectionConfig,
     ExecutionConfig,
     SessionConfig,
@@ -269,7 +272,10 @@ class TestWorkersAndManagersSemanticIntegration(unittest.TestCase):
         )
         parsed = ParsedConfig(
             sessions=[get_sess, sub_sess],
-            outputs={'out': {'type': 'file', 'file-type': 'stdout', 'format': 'json'}}
+            outputs=[OutputConfig(
+                format = OutputFormat.JSON,
+                output_type = OutputType.STDOUT,
+            )],
         )
         managers, handlers = ManagerFactory.create_managers(parsed)
         self.assertEqual(len(managers), 2)

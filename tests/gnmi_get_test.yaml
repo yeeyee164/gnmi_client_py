@@ -11,7 +11,7 @@ targets:
 
 outputs:
   default_output:
-    type: file
-    file-type: stdout
+    output-type: file
+    path: ./tests/gnmi_get_test_res.json
     format: json
 

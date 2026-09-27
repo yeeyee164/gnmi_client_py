@@ -4,8 +4,8 @@ global:
 
 outputs:
   log_file:
-    type: file
-    file-type: stdout
+    output-type: file
+    path: "./tests/gnmi_multi_sub_test.json"
     format: json
 
 # For gNMI Subscribe RPC

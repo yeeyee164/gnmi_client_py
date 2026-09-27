@@ -58,17 +58,6 @@ class SubscribeSession:
                 for k in ['target', 'security', 'username', 'password', 'protocol']:
                     self.kwargs.pop(k, None)
                 self.kwargs.update(kwargs)
-        else:
-            self.target_ip = target_ip
-            self.target_port = target_port
-            self.username = username
-            self.password = password
-            self.protocol = protocol.lower() if protocol else "gnmi"
-            self.security = security
-            self.insecure = kwargs.get('insecure', False)
-            self.operation = kwargs.get('operation', 'subscribe')
-            self.subscription_name = subscription_name
-            self.kwargs = kwargs
 
         self.debug = self.kwargs.get('debug', False)
         self.target = f'{self.target_ip}:{self.target_port}'
@@ -120,9 +109,6 @@ class SubscribeSession:
                     if isinstance(self.operation.protocol_options, GNMIOptions):
                         enc = self.operation.protocol_options.encoding
                         updates_only = self.operation.protocol_options.updates_only
-                    elif isinstance(self.operation.protocol_options, dict):
-                        enc = self.operation.protocol_options.get('encoding', enc)
-                        updates_only = self.operation.protocol_options.get('updates_only', False)
 
                     yield {
                         'action': 'subscribe',
@@ -137,6 +123,7 @@ class SubscribeSession:
                         'suppress_redundant': self.operation.delivery.suppress_redundant,
                         'encoding': enc,
                         'updates_only': updates_only,
+                        'protocol': self.protocol,
                     }
                 else:
                     yield {
@@ -181,7 +168,8 @@ class SubscribeSession:
                         'target': self.target,
                         'subscription_name': self.subscription_name,
                         'rpc': 'subscribe' if isinstance(self.operation, SubscribeOperation) else self.kwargs.get('operation', 'unknown'),
-                        'data': raw_response
+                        'data': raw_response,
+                        'protocol': self.protocol,
                     })
                     
         except Exception as e:

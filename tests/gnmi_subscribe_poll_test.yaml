@@ -2,8 +2,8 @@ protocol: "gnmi"
 insecure: true
 
 subscriptions:
-  system_and_interfaces_once:
-    mode: "once"
+  system_and_interfaces_poll:
+    mode: "poll"
     encoding: "json_ietf"
     subscription:
       path:
@@ -15,7 +15,7 @@ targets:
     username: "admin"
     password: "NokiaSrl1!"
     subscriptions:
-      - system_and_interfaces_once
+      - system_and_interfaces_poll
 
 outputs:
   default_output:

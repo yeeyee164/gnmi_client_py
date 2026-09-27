@@ -1,8 +1,11 @@
 from config.model import (
     Protocol,
+    OutputType,
+    OutputFormat,
     ConnectionConfig,
     ExecutionConfig,
     SessionConfig,
+    OutputConfig,
 )
 from config.selectors import (
     Selector,

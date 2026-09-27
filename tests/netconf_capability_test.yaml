@@ -8,7 +8,7 @@ targets:
 
 outputs:
   default_output:
-    type: file
-    file-type: stdout
+    output-type: file
+    path: "./tests/netconf_namespaces.json"
     format: json
 

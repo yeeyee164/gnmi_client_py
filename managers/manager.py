@@ -41,15 +41,8 @@ class BaseRPCManager:
             self.outputs = cfg.outputs
             if output_handlers is None:
                 self.output_handlers = []
-                if self.session_configs:
-                    proto = self.session_configs[0].protocol
-                    proto_str = proto.value if hasattr(proto, 'value') else str(proto).lower()
-                else:
-                    proto_str = 'gnmi'
-                for out_name, out_cfg in self.outputs.items():
-                    out_cfg['protocol'] = proto_str
-                    out_cfg['debug'] = self.debug
-                    self.output_handlers.append(OutputHandler(out_name, out_cfg))
+                for out_cfg in self.outputs:
+                    self.output_handlers.append(OutputHandler(out_cfg))
                 self._owns_handlers = True
             else:
                 self.output_handlers = output_handlers
@@ -214,16 +207,6 @@ class UnaryManager(BaseRPCManager):
             return SetWorker(config=sc)
         elif isinstance(op, CapabilitiesOperation):
             return CapabilityWorker(config=sc)
-        elif isinstance(op, str):
-            op_str = op.lower()
-            if op_str in ['get', 'get-config', 'get-schema']:
-                return GetWorker(config=sc)
-            elif op_str in ['set', 'edit-config']:
-                return SetWorker(config=sc)
-            elif op_str in ['capability', 'capabilities']:
-                return CapabilityWorker(config=sc)
-            else:
-                raise ValueError(f"Unsupported unary operation: {op_str}")
         else:
             raise ValueError(f"Unsupported unary operation: {op}")
 
@@ -263,15 +246,10 @@ class ManagerFactory:
     requested RPC.
     """
 
-    UNARY_OPS = {'get', 'get-config', 'get-schema', 'set', 'edit-config', 'capability', 'capabilities'}
-    STREAM_OPS = {'subscribe', 'stream', 'once', 'poll'}
-
     @staticmethod
     def _is_unary(session: Any) -> bool:
         op = getattr(session, 'operation', None)
         if isinstance(op, (CapabilitiesOperation, GetOperation, SetOperation, GetSchemaOperation)):
-            return True
-        if isinstance(op, str) and op.lower() in ManagerFactory.UNARY_OPS:
             return True
         return False
 
@@ -279,8 +257,6 @@ class ManagerFactory:
     def _is_stream(session: Any) -> bool:
         op = getattr(session, 'operation', None)
         if isinstance(op, SubscribeOperation):
-            return True
-        if isinstance(op, str) and op.lower() in ManagerFactory.STREAM_OPS:
             return True
         return False
 
@@ -291,16 +267,8 @@ class ManagerFactory:
         along with centralized OutputHandlers.
         """
         handlers = []
-        if cfg.sessions:
-            proto = cfg.sessions[0].protocol
-            default_proto = proto.value if hasattr(proto, 'value') else str(proto).lower()
-        else:
-            default_proto = 'gnmi'
-
-        for out_name, out_cfg in cfg.outputs.items():
-            out_cfg['protocol'] = default_proto
-            out_cfg['debug'] = cfg.debug
-            handlers.append(OutputHandler(out_name, out_cfg))
+        for out_cfg in cfg.outputs:
+            handlers.append(OutputHandler(out_cfg))
 
         # Validate that all operations are supported
         for s in cfg.sessions:

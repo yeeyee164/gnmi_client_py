@@ -12,8 +12,15 @@ from specs.client import GNMIClient
 from managers.unary_worker import SetWorker
 from modules.validate import GNMIValidator, PathValidationError
 from modules.formatter import GNMIFormatter
-from ui.cmd import build_args, CLIConfigBuilder, FileConfigBuilder, GNMISetConfig, create_session_config, SessionConfig
-from config.operations import SetOperation
+from ui.cmd import build_args, CLIConfigBuilder, SessionConfig
+
+from config import (
+    SetOperation,
+    ConnectionConfig,
+    Protocol,
+    Change,
+    ChangeType,
+)
 
 
 class TestGNMITypedValueAndSetRequest(unittest.TestCase):
@@ -112,9 +119,17 @@ class TestGNMISetValidation(unittest.TestCase):
 
     def test_worker_offline_validation_intercepts(self):
         # SetWorker should fail before opening connection if wildcard is present
-        config = GNMISetConfig(
-            target="10.0.0.1:8080",
-            updates=[('/interfaces/interface[name="*"]/config', "val")]
+        config = SessionConfig(
+        connection=ConnectionConfig(
+            target='10.0.0.3:9339'
+        ),
+        protocol=Protocol.GNMI,
+        operation=SetOperation(
+            changes=tuple([
+                Change(path='/interfaces/interface[name=*]/config/description',
+                operation=ChangeType.MERGE, value="Configured with asterisk")
+                ])
+            )
         )
         worker = SetWorker(config=config)
         res = worker.start()

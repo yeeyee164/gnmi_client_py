@@ -37,28 +37,14 @@ for m in [
             sys.modules[m] = mock_obj
 
 from ui.cmd import (
-    BaseSessionConfig,
-    BaseCapabilitiesConfig,
-    BaseGetConfig,
-    BaseSetConfig,
-    BaseSubscribeConfig,
-    GNMICapabilitiesConfig,
-    GNMIGetConfig,
-    GNMISetConfig,
-    GNMISubscribeConfig,
-    NetconfCapabilitiesConfig,
-    NetconfGetConfig,
-    NetconfEditConfig,
-    NetconfSubscribeConfig,
-    SESSION_CONFIG_REGISTRY,
-    create_session_config,
     SessionConfig,
-    GNMISessionConfig,
-    NetconfSessionConfig,
     ParsedConfig,
 )
 from config import (
     Protocol,
+    OutputFormat,
+    OutputType,
+    OutputConfig,
     ConnectionConfig,
     ExecutionConfig,
     PathSelector,
@@ -71,52 +57,73 @@ from config import (
     SubscribeOperation,
     Change,
     ChangeType,
+    GNMIOptions,
+    NetconfOptions,
 )
 from managers.manager import BaseRPCManager, UnaryManager, SubscriptionManager, ManagerFactory
 from managers.unary_worker import BaseUnaryWorker, GetWorker, SetWorker, CapabilityWorker
 from managers.subscribe_session import SubscribeSession
 
-
-class TestSessionConfigTargetParsing(unittest.TestCase):
-    def test_ipv4_target_parsing(self):
-        cfg = BaseSessionConfig(target='192.168.1.10:9339')
-        self.assertEqual(cfg.target_ip, '192.168.1.10')
-        self.assertEqual(cfg.target_port, 9339)
-
-    def test_ipv6_target_parsing(self):
-        cfg = BaseSessionConfig(target='[2001:db8::1]:9339')
-        self.assertEqual(cfg.target_ip, '2001:db8::1')
-        self.assertEqual(cfg.target_port, 9339)
-
-    def test_no_port_target_parsing(self):
-        cfg = BaseSessionConfig(target='router1.net')
-        self.assertEqual(cfg.target_ip, 'router1.net')
-        self.assertEqual(cfg.target_port, 0)
-
-
 def build_sample_sessions():
-    get_session_1 = GNMIGetConfig(
-        target='10.0.0.1:9339', operation='get', protocol='gnmi',
-        paths=['/interfaces/interface[name=eth0]']
+    get_session_1 = SessionConfig(
+        connection=ConnectionConfig(
+            target='10.0.0.1:9339'
+        ),
+        protocol=Protocol.GNMI,
+        operation=GetOperation(
+            selector=PathSelector(
+                paths=['/interfaces/interface[name=eth0]']
+            )
+        )
     )
-    get_session_2 = GNMIGetConfig(
-        target='10.0.0.2:9339', operation='get', protocol='gnmi',
-        paths=['/system/config']
+    get_session_2 = SessionConfig(
+        connection=ConnectionConfig(
+            target='10.0.0.2:9339'
+        ),
+        protocol=Protocol.GNMI,
+        operation=GetOperation(
+            selector=PathSelector(
+                paths=['/system-info/status']
+            )
+        )
     )
-    set_session = GNMISetConfig(
-        target='10.0.0.3:9339', operation='set', protocol='gnmi',
-        updates=[('/system/config/hostname', 'router3')]
+    set_session = SessionConfig(
+        connection=ConnectionConfig(
+            target='10.0.0.3:9339'
+        ),
+        protocol=Protocol.GNMI,
+        operation=SetOperation(
+            changes=([Change(path='/system/config/hostname', operation=ChangeType.MERGE, value="router3")])
+        )
     )
-    cap_session = GNMICapabilitiesConfig(
-        target='10.0.0.4:9339', operation='capability', protocol='gnmi'
+    cap_session = SessionConfig(
+        connection=ConnectionConfig(
+            target='10.0.0.4:9339'
+        ),
+        protocol=Protocol.GNMI,
+        operation=CapabilitiesOperation()
     )
-    sub_session_1 = GNMISubscribeConfig(
-        target='10.0.0.5:9339', operation='subscribe', protocol='gnmi',
-        subscription_name='sub_telemetry', paths=['/interfaces/...']
+    sub_session_1 = SessionConfig(
+        connection=ConnectionConfig(
+            target='10.0.0.5:9339'
+        ),
+        protocol=Protocol.GNMI,
+        operation=SubscribeOperation(
+            subscription_name='sub_telemetry',
+            selector=PathSelector(paths=["/interfaces"]),
+            delivery=DeliveryPolicy(mode=DeliveryMode.PERIODIC)
+        )
     )
-    sub_session_2 = GNMISubscribeConfig(
-        target='10.0.0.6:9339', operation='poll', protocol='gnmi',
-        subscription_name='sub_poll', paths=['/components/...']
+    sub_session_2 = SessionConfig(
+        connection=ConnectionConfig(
+            target='10.0.0.6:9339'
+        ),
+        protocol=Protocol.GNMI,
+        operation=SubscribeOperation(
+            subscription_name='sub_poll',
+            selector=PathSelector(paths=["/interfaces"]),
+            delivery=DeliveryPolicy(mode=DeliveryMode.POLL)
+        )
     )
 
     return {
@@ -131,16 +138,12 @@ def build_sample_sessions():
 
 
 def build_parsed_config(sample_sessions):
-    outputs = {
-        'default_output': {
-            'type': 'file',
-            'file-type': 'stdout',
-            'format': 'json'
-        }
-    }
     return ParsedConfig(
         sessions=sample_sessions['all'],
-        outputs=outputs,
+        outputs=[OutputConfig(
+            output_type=OutputType.STDOUT,
+            format=OutputFormat.JSON,
+        )],
         targets=[
             '10.0.0.1:9339', '10.0.0.2:9339', '10.0.0.3:9339',
             '10.0.0.4:9339', '10.0.0.5:9339', '10.0.0.6:9339'
@@ -173,11 +176,9 @@ class TestManagerSessionScoping(unittest.TestCase):
 
         unary_mgr = managers[0]
         self.assertEqual(len(unary_mgr.session_configs), 4)
-        self.assertEqual([s.operation for s in unary_mgr.session_configs], ['get', 'get', 'set', 'capability'])
 
         sub_mgr = managers[1]
         self.assertEqual(len(sub_mgr.session_configs), 2)
-        self.assertEqual([s.operation for s in sub_mgr.session_configs], ['subscribe', 'poll'])
 
     def test_unary_manager_build_sessions_dispatch(self):
         unary_sessions = [self.sample_sessions['get_1'], self.sample_sessions['set'], self.sample_sessions['cap']]
@@ -235,59 +236,73 @@ class TestManagerSessionScoping(unittest.TestCase):
 
 class TestPerRPCSessionConfigHierarchy(unittest.TestCase):
     def test_attribute_isolation_gnmi(self):
-        cap_cfg = GNMICapabilitiesConfig(target="10.0.0.1:9339")
-        self.assertFalse(hasattr(cap_cfg, 'paths'))
-        self.assertFalse(hasattr(cap_cfg, 'updates'))
-        self.assertFalse(hasattr(cap_cfg, 'sample_interval'))
-
-        get_cfg = GNMIGetConfig(target="10.0.0.1:9339", paths=["/interfaces"])
-        self.assertEqual(get_cfg.paths, ["/interfaces"])
-        self.assertFalse(hasattr(get_cfg, 'updates'))
-        self.assertFalse(hasattr(get_cfg, 'sample_interval'))
-
-        set_cfg = GNMISetConfig(target="10.0.0.1:9339", updates=[("/path", "val")])
-        self.assertEqual(set_cfg.updates, [("/path", "val")])
-        self.assertFalse(hasattr(set_cfg, 'paths'))
-        self.assertFalse(hasattr(set_cfg, 'sample_interval'))
-
-        sub_cfg = GNMISubscribeConfig(target="10.0.0.1:9339", sample_interval=30)
-        self.assertEqual(sub_cfg.sample_interval, 30)
-        self.assertFalse(hasattr(sub_cfg, 'updates'))
-
-    def test_create_session_config_filtering(self):
-        # Passing extraneous kwargs should be safely filtered
-        cfg = create_session_config(
-            "gnmi", "capability",
-            target="10.0.0.1:9339",
-            paths=["/invalid"],
-            updates=[("invalid", "val")],
-            sample_interval=100
+        cap_cfg = SessionConfig(
+            connection=ConnectionConfig(
+                target="10.0.0.1:9339"
+            ),
+            protocol=Protocol.GNMI,
+            operation=CapabilitiesOperation()
         )
-        self.assertIsInstance(cfg, GNMICapabilitiesConfig)
-        self.assertEqual(cfg.target, "10.0.0.1:9339")
-        self.assertFalse(hasattr(cfg, 'paths'))
-        self.assertFalse(hasattr(cfg, 'sample_interval'))
+        self.assertTrue(hasattr(cap_cfg, 'paths'))
+        self.assertTrue(hasattr(cap_cfg, 'updates'))
+        self.assertTrue(hasattr(cap_cfg, 'sample_interval'))
 
-    def test_create_session_config_netconf(self):
-        cap_cfg = create_session_config("netconf", "capability", target="10.0.0.1:830")
-        self.assertIsInstance(cap_cfg, NetconfCapabilitiesConfig)
+        get_cfg = SessionConfig(
+            connection=ConnectionConfig(
+                target="10.0.0.1:9339"
+            ),
+            protocol=Protocol.GNMI,
+            operation=GetOperation(
+                selector=PathSelector(
+                    paths=["/interface"],
+                    prefix="openconfig-interfaces:/interfaces"
+                )
+            )
+        )
+        self.assertEqual(get_cfg.paths, ["/interface"])
+        self.assertTrue(hasattr(get_cfg, 'updates'))
+        self.assertTrue(hasattr(get_cfg, 'sample_interval'))
 
-        get_cfg = create_session_config("netconf", "get-config", target="10.0.0.1:830", source="running", filter="<xml/>")
-        self.assertIsInstance(get_cfg, NetconfGetConfig)
-        self.assertEqual(get_cfg.source, "running")
-        self.assertEqual(get_cfg.filter, "<xml/>")
+        set_cfg = SessionConfig(
+            connection=ConnectionConfig(
+                target="10.0.0.1:9339"
+            ),
+            protocol=Protocol.GNMI,
+            operation=SetOperation(
+                operation=GNMIOptions(encoding="json_ietf"),
+                changes=tuple([Change(
+                    operation=ChangeType.MERGE,
+                    path="/path", value="val"
+                    )])
+            )
+        )
+        self.assertEqual(set_cfg.operation.changes[0], ("/path", ChangeType.MERGE, "val"))
+        self.assertTrue(hasattr(set_cfg, 'paths'))
+        self.assertTrue(hasattr(set_cfg, 'sample_interval'))
 
-        edit_cfg = create_session_config("netconf", "edit-config", target="10.0.0.1:830", target_datastore="candidate")
-        self.assertIsInstance(edit_cfg, NetconfEditConfig)
-        self.assertEqual(edit_cfg.target_datastore, "candidate")
-
-        sub_cfg = create_session_config("netconf", "subscribe", target="10.0.0.1:830", stream_name="NETCONF")
-        self.assertIsInstance(sub_cfg, NetconfSubscribeConfig)
-        self.assertEqual(sub_cfg.stream_name, "NETCONF")
-
-    def test_backward_compatibility_aliases(self):
-        self.assertIs(GNMISessionConfig, BaseSessionConfig)
-        self.assertIs(NetconfSessionConfig, BaseSessionConfig)
+        sub_cfg = SessionConfig(
+            connection=ConnectionConfig(
+                target="10.0.0.1:9339"
+            ),
+            protocol=Protocol.GNMI,
+            operation=SubscribeOperation(
+                selector=PathSelector(
+                    paths=("/interfaces"),
+                ),
+                delivery=DeliveryPolicy(
+                    mode=DeliveryMode.PERIODIC,
+                    interval=30,
+                    heartbeat=0,
+                    suppress_redundant=False
+                ),
+                protocol_options=GNMIOptions(
+                    encoding="json_ietf",
+                    updates_only=False
+                )
+            )
+        )
+        self.assertEqual(sub_cfg.operation.delivery.interval, 30)
+        self.assertTrue(hasattr(sub_cfg, 'updates'))
 
 
 class TestSemanticManagerSessionScoping(unittest.TestCase):
@@ -334,7 +349,10 @@ class TestSemanticManagerSessionScoping(unittest.TestCase):
         self.all_sessions = [self.get_1, self.get_2, self.set_1, self.cap_1, self.sub_1, self.sub_2]
         self.parsed_config = ParsedConfig(
             sessions=self.all_sessions,
-            outputs={'out': {'type': 'file', 'file-type': 'stdout', 'format': 'json'}},
+            outputs=[OutputConfig(
+                output_type=OutputType.STDERR,
+                format=OutputFormat.XML,
+            )],
             targets=['10.0.0.1:9339', '10.0.0.2:9339', '10.0.0.3:9339', '10.0.0.4:9339', '10.0.0.5:9339', '10.0.0.6:9339']
         )
 

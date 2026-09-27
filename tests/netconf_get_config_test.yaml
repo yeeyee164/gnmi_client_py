@@ -10,7 +10,6 @@ targets:
 
 outputs:
   default_output:
-    type: file
-    file-type: stdout
+    output-type: stdout
     format: json
 
