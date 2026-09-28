@@ -134,8 +134,6 @@ class GetWorker(BaseUnaryWorker):
         super().__init__(target_ip=target_ip, target_port=target_port, config=config, **kwargs)
         if isinstance(self.operation, GetOperation) and hasattr(self.operation.selector, 'paths'):
             self.paths = list(self.operation.selector.paths)
-        elif self.config and hasattr(self.config, 'paths'):
-            self.paths = self.config.paths
         else:
             paths = kwargs.get('paths', [])
             self.paths = paths
@@ -175,11 +173,6 @@ class SetWorker(BaseUnaryWorker):
                 elif change.operation == ChangeType.DELETE:
                     self.deletes.append(change.path)
             self.prefix = getattr(self.operation.protocol_options, 'prefix', '') if hasattr(self.operation.protocol_options, 'prefix') else ''
-        elif self.config:
-            self.updates = getattr(self.config, 'updates', None) or updates or []
-            self.replaces = getattr(self.config, 'replaces', None) or replaces or []
-            self.deletes = getattr(self.config, 'deletes', None) or deletes or []
-            self.prefix = getattr(self.config, 'prefix', '') or kwargs.get('prefix', '')
         else:
             self.updates = updates or []
             self.replaces = replaces or []
@@ -228,15 +221,6 @@ class SetWorker(BaseUnaryWorker):
             with self._get_client() as client:
                 if isinstance(self.operation, SetOperation):
                     result = client.execute_set(self.operation)
-                else:
-                    call_kwargs = dict(self.kwargs)
-                    if self.updates and 'updates' not in call_kwargs:
-                        call_kwargs['updates'] = self.updates
-                    if self.replaces and 'replaces' not in call_kwargs:
-                        call_kwargs['replaces'] = self.replaces
-                    if self.deletes and 'deletes' not in call_kwargs:
-                        call_kwargs['deletes'] = self.deletes
-                    result = client.set(**call_kwargs)
                 return self._format_result("set", result)
         except Exception as e:
             logger.error(f"[Worker(Set) {self.target_ip}] Error: {e}")

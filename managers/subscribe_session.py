@@ -44,20 +44,6 @@ class SubscribeSession:
                 self.operation = config.operation
                 self.subscription_name = getattr(config.operation, 'subscription_name', 'default_sub')
                 self.kwargs = dict(kwargs)
-            else:
-                self.target_ip = config.target_ip
-                self.target_port = config.target_port
-                self.username = config.username
-                self.password = config.password
-                self.protocol = config.protocol.lower() if config.protocol else "gnmi"
-                self.security = config.security
-                self.insecure = getattr(config, 'insecure', False)
-                self.operation = getattr(config, 'operation', 'subscribe')
-                self.subscription_name = getattr(config, 'subscription_name', subscription_name)
-                self.kwargs = dataclasses.asdict(config)
-                for k in ['target', 'security', 'username', 'password', 'protocol']:
-                    self.kwargs.pop(k, None)
-                self.kwargs.update(kwargs)
 
         self.debug = self.kwargs.get('debug', False)
         self.target = f'{self.target_ip}:{self.target_port}'
