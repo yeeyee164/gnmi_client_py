@@ -109,8 +109,6 @@ class GNMIClient(BaseClient):
         enc = self.encoding
         if isinstance(operation.protocol_options, GNMIOptions) and operation.protocol_options.encoding:
             enc = operation.protocol_options.encoding
-        elif isinstance(operation.protocol_options, dict) and operation.protocol_options.get('encoding'):
-            enc = operation.protocol_options['encoding']
 
         data_type = operation.read_scope or "all"
         return self.get(paths=paths, prefix=prefix, encoding=enc, data_type=data_type)
@@ -134,9 +132,6 @@ class GNMIClient(BaseClient):
         if isinstance(operation.protocol_options, GNMIOptions):
             if operation.protocol_options.encoding:
                 enc = operation.protocol_options.encoding
-        elif isinstance(operation.protocol_options, dict):
-            prefix = operation.protocol_options.get('prefix', prefix)
-            enc = operation.protocol_options.get('encoding', self.encoding)
 
         return self.set(updates=updates, replaces=replaces, deletes=deletes, prefix=prefix, encoding=enc)
 
@@ -171,9 +166,6 @@ class GNMIClient(BaseClient):
             if operation.protocol_options.encoding:
                 enc = operation.protocol_options.encoding
             updates_only = operation.protocol_options.updates_only
-        elif isinstance(operation.protocol_options, dict):
-            enc = operation.protocol_options.get('encoding', enc)
-            updates_only = operation.protocol_options.get('updates_only', False)
 
         req_dict = {
             'action': 'subscribe',

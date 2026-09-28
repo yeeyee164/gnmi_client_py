@@ -52,10 +52,6 @@ class OutputHandler:
         else: # default is gNMI
             self.formatter = GNMIFormatter()
 
-        if isinstance(raw_data, Exception):
-            self.stream.flush()
-            return
-
         if self.format in ['json', 'xml']:
             meta = {
                 'source': message.get('target'),

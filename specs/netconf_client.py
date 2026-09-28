@@ -103,8 +103,6 @@ class NetconfClient(BaseClient):
         source = "running"
         if isinstance(operation.protocol_options, NetconfOptions):
             source = operation.protocol_options.source or "running"
-        elif isinstance(operation.protocol_options, dict):
-            source = operation.protocol_options.get('source', 'running')
 
         op_name = "get-config" if operation.read_scope == "config" else "get"
         return self.get(
@@ -130,17 +128,12 @@ class NetconfClient(BaseClient):
             test_opt = operation.protocol_options.test_option
             commit = operation.protocol_options.commit
             raw_config = operation.protocol_options.config
-        elif isinstance(operation.protocol_options, dict):
-            target_ds = operation.protocol_options.get('target_datastore', 'candidate')
-            default_op = operation.protocol_options.get('default_operation', 'merge')
-            error_opt = operation.protocol_options.get('error_option', 'stop-on-error')
-            test_opt = operation.protocol_options.get('test_option', None)
-            commit = operation.protocol_options.get('commit', True)
-            raw_config = operation.protocol_options.get('config', None)
 
         updates = []
         replaces = []
         deletes = []
+        creates = []
+        removes = []
         for change in operation.changes:
             val = change.value if change.value is not None else change.path
             if change.operation == ChangeType.MERGE:
@@ -149,6 +142,10 @@ class NetconfClient(BaseClient):
                 replaces.append(val)
             elif change.operation == ChangeType.DELETE:
                 deletes.append(val)
+            elif change.operation == ChangeType.CREATE:
+                creates.append(val)
+            elif change.operation == ChangeType.REMOVE:
+                removes.append(val)
 
         return self.set(
             config=raw_config,
@@ -160,6 +157,8 @@ class NetconfClient(BaseClient):
             updates=updates or None,
             replaces=replaces or None,
             deletes=deletes or None,
+            creates=creates or None,
+            removes=removes or None,
         )
 
     def execute_subscribe(self, operation: SubscribeOperation) -> Iterator[Any]:
@@ -242,7 +241,13 @@ class NetconfClient(BaseClient):
         except operations.RPCError as e:
             return e
 
-    def set(self, updates: Optional[list] = None, replaces: Optional[list] = None, deletes: Optional[list] = None, **kwargs) -> Any:
+    def set(self,
+            updates: Optional[list] = None,
+            replaces: Optional[list] = None,
+            deletes: Optional[list] = None,
+            creates: Optional[list] = None,
+            removes: Optional[list] = None,
+            **kwargs) -> Any:
         """
         Executes a NETCONF <edit-config>.
         Handles raw XML strings, file paths, and structured config elements.
@@ -258,6 +263,8 @@ class NetconfClient(BaseClient):
 
             extracted_target = None
             extracted_default_op = None
+            extracted_test_op = None
+            extracted_error_op = None
             config_xml = ""
 
             if raw_config:
@@ -283,6 +290,16 @@ class NetconfClient(BaseClient):
                                 def_op_el = root.find('default-operation')
                             if def_op_el is not None:
                                 extracted_default_op = def_op_el.text
+                            test_op_el = root.find('nc:test-option', namespaces=NETCONF_NS)
+                            if test_op_el is None:
+                                test_op_el = root.find('test-option')
+                            if test_op_el is not None and test_op_el.text:
+                                extracted_test_op = test_op_el.text.strip()
+                            err_op_el = root.find('nc:error-option', namespaces=NETCONF_NS)
+                            if err_op_el is None:
+                                err_op_el = root.find('error-option')
+                            if err_op_el is not None and err_op_el.text:
+                                extracted_error_op = err_op_el.text.strip()
                             config_elem = root.find('nc:config', namespaces=NETCONF_NS)
                             if config_elem is None:
                                 config_elem = root.find('config')
@@ -316,6 +333,10 @@ class NetconfClient(BaseClient):
                     return snip_str
 
                 xml_snippets = []
+                for c in (creates or []):
+                    xml_snippets.append(_tag_snippet(c, 'create'))
+                for rm in (removes or []):
+                    xml_snippets.append(_tag_snippet(rm, 'remove'))
                 for u in (updates or []):
                     xml_snippets.append(_tag_snippet(u, 'merge'))
                 for r in (replaces or []):
@@ -338,8 +359,8 @@ class NetconfClient(BaseClient):
             if default_op not in ['merge', 'replace', 'none']:
                 default_op = 'merge'
 
-            error_option = kwargs.get('error_option', 'stop-on-error')
-            test_option = kwargs.get('test_option')
+            error_option = kwargs.get('error_option') or extracted_error_op or 'stop-on-error'
+            test_option = kwargs.get('test_option') or extracted_test_op
 
             logger.debug(f"[NetconfClient] edit-config target={target_ds}, default_op={default_op}, error_option={error_option}")
             edit_kwargs = {

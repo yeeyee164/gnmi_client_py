@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rpc xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="201">
+  <edit-config>
+    <target>
+      <candidate/>
+    </target>
+    <test-option>test-then-set</test-option>
+    <error-option>rollback-on-error</error-option>
+    <config>
+      <system xmlns="http://openconfig.net/yang/system" xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0">
+        <config>
+          <motd-banner nc:operation="remove"/>
+        </config>
+      </system>
+    </config>
+  </edit-config>
+</rpc>
+

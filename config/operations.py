@@ -31,6 +31,8 @@ class ChangeType(str, Enum):
     MERGE = "merge"
     REPLACE = "replace"
     DELETE = "delete"
+    CREATE = "create"
+    REMOVE = "remove"
 
 @dataclass(frozen=True, kw_only=True)
 class Change:
