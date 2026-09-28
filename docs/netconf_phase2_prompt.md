@@ -24,14 +24,13 @@ Please execute the following roadmap in order. Provide your planned diffs for re
 
 **Tasks:**
 
-1. Implement the signature: set(self, updates: list \= None, replaces: list \= None, deletes: list \= None, \*\*kwargs) \-\> Any.  
+1. Implement the signature: set(self, updates: list \= None, replaces: list \= None, deletes: list \= None, creates: list \= None, removes: list \= None, \*\*kwargs) \-\> Any.  
 2. **Target Resolution:** Extract the target datastore using kwargs.get('target', 'running') (allowing candidate or running).  
 3. **Payload Assembly & Operation Mapping:**  
    * If kwargs.get('config') is provided (a raw XML string or file path), pass it directly as the payload.  
    * Map updates \-\> \<edit-config default-operation="merge"\>.  
    * Map replaces \-\> \<edit-config default-operation="replace"\>.  
    * Map deletes \-\> \<edit-config default-operation="delete"\> (or remove).  
-     *(Note: Since we are in the "lite" NETCONF phase, you can assume updates/replaces will either be raw XML snippet strings or we will rely on ncclient's dict-to-XML features if the user passes a dictionary).*  
 4. Call self.session.edit\_config(target=..., config=...).  
 5. Ensure RPCError exceptions are caught and returned just like in get(), so the NETCONFFormatter can parse them.
 

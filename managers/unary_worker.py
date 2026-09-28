@@ -2,9 +2,19 @@ import time
 import hashlib
 import logging
 import dataclasses
+from typing import Optional, Any
 
 from util.utils import str_to_bytes
 from managers.factory import ClientFactory, ValidatorFactory
+from config.model import SessionConfig, Protocol
+from config.operations import (
+    OperationConfig,
+    CapabilitiesOperation,
+    GetOperation,
+    SetOperation,
+    GetSchemaOperation,
+    ChangeType,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -16,17 +26,33 @@ class BaseUnaryWorker:
                  password="", protocol='gnmi',
                  security=None, config=None, **kwargs):
         self.config = config
+        self.session = config
+
         if config is not None:
-            self.target_ip = config.target_ip
-            self.target_port = config.target_port
-            self.username = config.username
-            self.password = config.password
-            self.protocol = config.protocol.lower() if config.protocol else 'gnmi'
-            self.security = config.security
-            self.kwargs = dataclasses.asdict(config)
-            for k in ['target', 'security', 'username', 'password', 'protocol']:
-                self.kwargs.pop(k, None)
-            self.kwargs.update(kwargs)
+            if isinstance(config, SessionConfig) or hasattr(config, 'connection'):
+                self.target_ip = config.target_ip
+                self.target_port = config.target_port
+                self.username = config.username
+                self.password = config.password
+                proto_val = config.protocol
+                self.protocol = proto_val.value if hasattr(proto_val, 'value') else str(proto_val).lower()
+                self.security = config.security
+                self.insecure = config.insecure
+                self.operation = config.operation
+                self.kwargs = dict(kwargs)
+            else:
+                self.target_ip = config.target_ip
+                self.target_port = config.target_port
+                self.username = config.username
+                self.password = config.password
+                self.protocol = config.protocol.lower() if config.protocol else 'gnmi'
+                self.security = config.security
+                self.insecure = getattr(config, 'insecure', False)
+                self.operation = getattr(config, 'operation', '')
+                self.kwargs = dataclasses.asdict(config)
+                for k in ['target', 'security', 'username', 'password', 'protocol']:
+                    self.kwargs.pop(k, None)
+                self.kwargs.update(kwargs)
         else:
             self.target_ip = target_ip
             self.target_port = target_port
@@ -34,6 +60,8 @@ class BaseUnaryWorker:
             self.password = password
             self.protocol = protocol.lower() if protocol else 'gnmi'
             self.security = security
+            self.insecure = kwargs.get('insecure', False)
+            self.operation = kwargs.get('operation', '')
             self.kwargs = kwargs
 
         self.target = f'{self.target_ip}:{self.target_port}'
@@ -41,24 +69,39 @@ class BaseUnaryWorker:
         raw_id_str = f"{self.target_ip}:{self.target_port}:{time.time()}"
         self.session_id = hashlib.md5(str_to_bytes(raw_id_str)).hexdigest()[:10]
 
-        # validator - TODO
-        # self.validator = ValidatorFactory.get_validator(self.protocol)
-    
     def _format_result(self, default_rpc_name, data):
         """Standardizes the output dictionary for the handlers"""
+        if isinstance(self.operation, OperationConfig):
+            if isinstance(self.operation, CapabilitiesOperation):
+                rpc_name = "capability"
+            elif isinstance(self.operation, GetSchemaOperation):
+                rpc_name = "get-schema"
+            elif isinstance(self.operation, GetOperation):
+                rpc_name = "get-config" if self.operation.read_scope == "config" else "get"
+            elif isinstance(self.operation, SetOperation):
+                rpc_name = "edit-config" if self.protocol == "netconf" else "set"
+            else:
+                rpc_name = default_rpc_name
+        elif isinstance(self.operation, str) and self.operation:
+            rpc_name = self.operation
+        else:
+            rpc_name = self.kwargs.get('operation', default_rpc_name)
 
         return {
             'session_id': self.session_id,
             'target': self.target,
-            'rpc': self.kwargs.get('operation', default_rpc_name),
+            'rpc': rpc_name,
             'data': data,
+            'protocol': self.protocol,
         }
 
     def _get_client(self):
         """Asks the factory for a client based on the requested protocol"""
-        client_kwargs = dict(self.kwargs)
+        client_kwargs = dict(self.kwargs) if hasattr(self, 'kwargs') and self.kwargs else {}
         for k in ['target', 'security', 'username', 'password', 'protocol']:
             client_kwargs.pop(k, None)
+        if hasattr(self, 'insecure'):
+            client_kwargs.setdefault('insecure', self.insecure)
         return ClientFactory.get_client(
             protocol=self.protocol, target=self.target, 
             username=self.username, password=self.password,
@@ -71,7 +114,12 @@ class CapabilityWorker(BaseUnaryWorker):
 
         try:
             with self._get_client() as client:
-                result = client.capability(**self.kwargs)
+                if isinstance(self.operation, CapabilitiesOperation):
+                    result = client.execute_capabilities(self.operation)
+                elif hasattr(client, 'execute_capabilities') and not self.kwargs:
+                    result = client.execute_capabilities(CapabilitiesOperation())
+                else:
+                    result = client.capability(**self.kwargs)
                 return self._format_result("capability", result)
                 
         except Exception as e:
@@ -84,7 +132,9 @@ class CapabilityWorker(BaseUnaryWorker):
 class GetWorker(BaseUnaryWorker):
     def __init__(self, target_ip=None, target_port=None, config=None, **kwargs):
         super().__init__(target_ip=target_ip, target_port=target_port, config=config, **kwargs)
-        if self.config and hasattr(self.config, 'paths'):
+        if isinstance(self.operation, GetOperation) and hasattr(self.operation.selector, 'paths'):
+            self.paths = list(self.operation.selector.paths)
+        elif self.config and hasattr(self.config, 'paths'):
             self.paths = self.config.paths
         else:
             paths = kwargs.get('paths', [])
@@ -94,14 +144,13 @@ class GetWorker(BaseUnaryWorker):
         logger.debug(f"[Worker(Get) {self.target_ip}] Requesting Get...")
 
         try:
-            #1. validate inputs
-            # TODO: it will be handled by protocol-agnostic validator
-            # for path in self.paths:
-            #     self.validator.validate_path(path)
-
-            #2. create a client session
             with self._get_client() as client:
-                result = client.get(**self.kwargs)
+                if isinstance(self.operation, GetOperation):
+                    result = client.execute_get(self.operation)
+                elif isinstance(self.operation, GetSchemaOperation):
+                    result = client.execute_schema(self.operation)
+                else:
+                    result = client.get(**self.kwargs)
                 return self._format_result("get", result)
                 
         except Exception as e:
@@ -113,14 +162,20 @@ class GetWorker(BaseUnaryWorker):
 
 class SetWorker(BaseUnaryWorker):
     def __init__(self, target_ip=None, target_port=None, updates=None, replaces=None, deletes=None, config=None, **kwargs):
-        """
-        In SetRequest, it handles three case of requests
-        * update -> [('path', 'value'), ...]
-        * delete -> ['path', ...]
-        * replace -> [('path', 'value'), ...]
-        """
         super().__init__(target_ip=target_ip, target_port=target_port, config=config, **kwargs)
-        if self.config:
+        if isinstance(self.operation, SetOperation):
+            self.updates = []
+            self.replaces = []
+            self.deletes = []
+            for change in self.operation.changes:
+                if change.operation == ChangeType.MERGE:
+                    self.updates.append((change.path, change.value))
+                elif change.operation == ChangeType.REPLACE:
+                    self.replaces.append((change.path, change.value))
+                elif change.operation == ChangeType.DELETE:
+                    self.deletes.append(change.path)
+            self.prefix = getattr(self.operation.protocol_options, 'prefix', '') if hasattr(self.operation.protocol_options, 'prefix') else ''
+        elif self.config:
             self.updates = getattr(self.config, 'updates', None) or updates or []
             self.replaces = getattr(self.config, 'replaces', None) or replaces or []
             self.deletes = getattr(self.config, 'deletes', None) or deletes or []
@@ -167,20 +222,21 @@ class SetWorker(BaseUnaryWorker):
     def start(self):
         logger.debug(f"[Worker(Set) {self.target_ip}] Requesting Set...")
         try:
-            # 1. validate inputs offline before dispatching network call if validator available
             if self.validator is not None:
                 self._validate_paths()
 
-            # 2. create a client session and execute
             with self._get_client() as client:
-                call_kwargs = dict(self.kwargs)
-                if self.updates and 'updates' not in call_kwargs:
-                    call_kwargs['updates'] = self.updates
-                if self.replaces and 'replaces' not in call_kwargs:
-                    call_kwargs['replaces'] = self.replaces
-                if self.deletes and 'deletes' not in call_kwargs:
-                    call_kwargs['deletes'] = self.deletes
-                result = client.set(**call_kwargs)
+                if isinstance(self.operation, SetOperation):
+                    result = client.execute_set(self.operation)
+                else:
+                    call_kwargs = dict(self.kwargs)
+                    if self.updates and 'updates' not in call_kwargs:
+                        call_kwargs['updates'] = self.updates
+                    if self.replaces and 'replaces' not in call_kwargs:
+                        call_kwargs['replaces'] = self.replaces
+                    if self.deletes and 'deletes' not in call_kwargs:
+                        call_kwargs['deletes'] = self.deletes
+                    result = client.set(**call_kwargs)
                 return self._format_result("set", result)
         except Exception as e:
             logger.error(f"[Worker(Set) {self.target_ip}] Error: {e}")

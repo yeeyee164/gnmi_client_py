@@ -4,12 +4,20 @@ import queue
 import json
 import concurrent.futures
 import dataclasses
-from typing import List, Optional, Tuple, Type
+from typing import List, Optional, Tuple, Type, Any
 
 from managers.subscribe_session import SubscribeSession
 from managers.unary_worker import BaseUnaryWorker, GetWorker, SetWorker, CapabilityWorker
 from modules.output import OutputHandler
-from ui.cmd import ParsedConfig, BaseSessionConfig
+from config.model import SessionConfig, Protocol
+from config.operations import (
+    OperationConfig,
+    CapabilitiesOperation,
+    GetOperation,
+    SetOperation,
+    SubscribeOperation,
+    GetSchemaOperation,
+)
 
 import logging
 
@@ -22,10 +30,10 @@ class BaseRPCManager:
 
     def __init__(
         self,
-        sessions: Optional[List[BaseSessionConfig]] = None,
+        sessions: Optional[List[Any]] = None,
         output_handlers: Optional[List[OutputHandler]] = None,
         debug: bool = False,
-        cfg: Optional[ParsedConfig] = None
+        cfg: Optional[Any] = None
     ):
         if cfg is not None:
             self.session_configs = sessions if sessions is not None else cfg.sessions
@@ -33,11 +41,8 @@ class BaseRPCManager:
             self.outputs = cfg.outputs
             if output_handlers is None:
                 self.output_handlers = []
-                proto = self.session_configs[0].protocol if self.session_configs else 'gnmi'
-                for out_name, out_cfg in self.outputs.items():
-                    out_cfg['protocol'] = proto
-                    out_cfg['debug'] = self.debug
-                    self.output_handlers.append(OutputHandler(out_name, out_cfg))
+                for out_cfg in self.outputs:
+                    self.output_handlers.append(OutputHandler(out_cfg))
                 self._owns_handlers = True
             else:
                 self.output_handlers = output_handlers
@@ -65,16 +70,13 @@ class SubscriptionManager(BaseRPCManager):
 
     def __init__(
         self,
-        sessions: Optional[List[BaseSessionConfig]] = None,
+        sessions: Optional[List[Any]] = None,
         output_handlers: Optional[List[OutputHandler]] = None,
         debug: bool = False,
-        cfg: Optional[ParsedConfig] = None
+        cfg: Optional[Any] = None
     ):
         super().__init__(sessions=sessions, output_handlers=output_handlers, debug=debug, cfg=cfg)
         self.threads = []            # Holds the active Thread objects
-
-        # common channel for worker results
-        # this queue supports Locking mechanism
         self.data_queue = queue.Queue()
 
     def build_sessions(self):
@@ -104,7 +106,11 @@ class SubscriptionManager(BaseRPCManager):
             t.start()
 
         # run another thread to invoke Poll mechanism(gNMI)
-        if any(s.kwargs.get('mode','').lower() == 'poll' for s in self.sessions):
+        has_poll = any(
+            (getattr(s, 'is_poll_mode', lambda: False)() or getattr(s, 'kwargs', {}).get('mode', '').lower() == 'poll')
+            for s in self.sessions
+        )
+        if has_poll:
             controller_t = threading.Thread(target=self._interactive_poll_controller, daemon=True)
             controller_t.start()
 
@@ -138,11 +144,12 @@ class SubscriptionManager(BaseRPCManager):
 
     def _interactive_poll_controller(self):
         """A simple background CLI to allow users to trigger polls manually."""
-        poll_sessions = [s for s in self.sessions if s.kwargs.get('mode','').lower() == 'poll']
-        time.sleep(2) # Give streams a moment to connect
+        poll_sessions = [
+            s for s in self.sessions
+            if (getattr(s, 'is_poll_mode', lambda: False)() or getattr(s, 'kwargs', {}).get('mode', '').lower() == 'poll')
+        ]
+        time.sleep(2)
         
-        # This is an interactive terminal session for POLL.
-        # So no need to change to logger
         while True:
             print("\n" + "="*40)
             print(" Interactive POLL Controller")
@@ -176,29 +183,29 @@ class UnaryManager(BaseRPCManager):
 
     def __init__(
         self,
-        sessions: Optional[List[BaseSessionConfig]] = None,
+        sessions: Optional[List[Any]] = None,
         output_handlers: Optional[List[OutputHandler]] = None,
         debug: bool = False,
         worker_class: Optional[Type[BaseUnaryWorker]] = None,
-        cfg: Optional[ParsedConfig] = None
+        cfg: Optional[Any] = None
     ):
         # Support legacy UnaryManager(cfg, worker_class) signature
-        if isinstance(sessions, ParsedConfig) and cfg is None:
+        if hasattr(sessions, 'sessions') and cfg is None:
             cfg = sessions
             sessions = None
         super().__init__(sessions=sessions, output_handlers=output_handlers, debug=debug, cfg=cfg)
         self.worker_class = worker_class
 
-    def _resolve_worker(self, sc: BaseSessionConfig) -> BaseUnaryWorker:
+    def _resolve_worker(self, sc: Any) -> BaseUnaryWorker:
         if self.worker_class is not None:
             return self.worker_class(config=sc)
 
-        op = sc.operation.lower()
-        if op in ['get', 'get-config', 'get-schema']:
+        op = getattr(sc, 'operation', None)
+        if isinstance(op, (GetOperation, GetSchemaOperation)):
             return GetWorker(config=sc)
-        elif op in ['set', 'edit-config']:
+        elif isinstance(op, SetOperation):
             return SetWorker(config=sc)
-        elif op in ['capability', 'capabilities']:
+        elif isinstance(op, CapabilitiesOperation):
             return CapabilityWorker(config=sc)
         else:
             raise ValueError(f"Unsupported unary operation: {op}")
@@ -217,14 +224,12 @@ class UnaryManager(BaseRPCManager):
         
         logger.info(f"[Manager] Starting {len(self.sessions)} concurrent unary tasks...")
 
-        # By using ThreadPoolExecutor, we can handle unary RPCs concurrently
         with concurrent.futures.ThreadPoolExecutor(max_workers=max(len(self.sessions), 1)) as executor:
             future_to_session = {executor.submit(session.start): session for session in self.sessions}
 
             for future in concurrent.futures.as_completed(future_to_session):
                 session = future_to_session[future]
                 try:
-                    # Retrieve the returned dictionary from the worker's start() method
                     result = future.result()
                     if result:
                         for handler in self.output_handlers:
@@ -241,31 +246,38 @@ class ManagerFactory:
     requested RPC.
     """
 
-    UNARY_OPS = {'get', 'get-config', 'get-schema', 'set', 'edit-config', 'capability', 'capabilities'}
-    STREAM_OPS = {'subscribe', 'stream', 'once', 'poll'}
+    @staticmethod
+    def _is_unary(session: Any) -> bool:
+        op = getattr(session, 'operation', None)
+        if isinstance(op, (CapabilitiesOperation, GetOperation, SetOperation, GetSchemaOperation)):
+            return True
+        return False
 
     @staticmethod
-    def create_managers(cfg: ParsedConfig) -> Tuple[List[BaseRPCManager], List[OutputHandler]]:
+    def _is_stream(session: Any) -> bool:
+        op = getattr(session, 'operation', None)
+        if isinstance(op, SubscribeOperation):
+            return True
+        return False
+
+    @staticmethod
+    def create_managers(cfg: Any) -> Tuple[List[BaseRPCManager], List[OutputHandler]]:
         """
         Partitions sessions from ParsedConfig and instantiates the proper managers
         along with centralized OutputHandlers.
         """
         handlers = []
-        default_proto = cfg.sessions[0].protocol if cfg.sessions else 'gnmi'
-        for out_name, out_cfg in cfg.outputs.items():
-            out_cfg['protocol'] = default_proto
-            out_cfg['debug'] = cfg.debug
-            handlers.append(OutputHandler(out_name, out_cfg))
+        for out_cfg in cfg.outputs:
+            handlers.append(OutputHandler(out_cfg))
 
         # Validate that all operations are supported
-        all_known = ManagerFactory.UNARY_OPS | ManagerFactory.STREAM_OPS
         for s in cfg.sessions:
-            if s.operation.lower() not in all_known:
-                raise ValueError(f"failed to pick a manager for operation: {s.operation}")
+            if not ManagerFactory._is_unary(s) and not ManagerFactory._is_stream(s):
+                raise ValueError(f"failed to pick a manager for operation: {getattr(s, 'operation', None)}")
 
         # Partition sessions strictly by operation type
-        unary_sessions = [s for s in cfg.sessions if s.operation.lower() in ManagerFactory.UNARY_OPS]
-        stream_sessions = [s for s in cfg.sessions if s.operation.lower() in ManagerFactory.STREAM_OPS]
+        unary_sessions = [s for s in cfg.sessions if ManagerFactory._is_unary(s)]
+        stream_sessions = [s for s in cfg.sessions if ManagerFactory._is_stream(s)]
 
         managers: List[BaseRPCManager] = []
         if unary_sessions:
@@ -284,7 +296,7 @@ class ManagerFactory:
         return managers, handlers
 
     @staticmethod
-    def create_manager(cfg: ParsedConfig) -> List[BaseRPCManager]:
+    def create_manager(cfg: Any) -> List[BaseRPCManager]:
         """
         Backward-compatible method returning only the list of managers.
         """
@@ -292,7 +304,7 @@ class ManagerFactory:
         return managers
 
     @staticmethod
-    def execute(cfg: ParsedConfig):
+    def execute(cfg: Any):
         """
         Instantiates and executes managers for the given ParsedConfig with centralized output lifecycle.
         """
@@ -303,4 +315,3 @@ class ManagerFactory:
         finally:
             for handler in handlers:
                 handler.close()
-

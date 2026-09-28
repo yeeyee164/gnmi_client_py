@@ -3,6 +3,11 @@ import sys
 import json
 
 from modules.formatter import GNMIFormatter, NETCONFFormatter
+from config import(
+    OutputConfig,
+    OutputType,
+    OutputFormat
+)
 
 class OutputHandler:
     """
@@ -18,39 +23,34 @@ class OutputHandler:
     NOTE: It's not the encoding rule defined at protocol.
     """
 
-    def __init__(self, name, config):
-        self.name = name
-        self.type = config.get('type', 'file')
-        self.file_type = config.get('file-type', 'stdout')
-        self.format = config.get('format', 'json').lower()
+    def __init__(self, config:OutputConfig):
+        self.name = config.name
+        self.file_type = config.output_type
+        self.format = config.format
 
-        # Select protocol
-        self.protocol = config.get('protocol', 'gnmi').lower()
-
-        # Instantiate protocol formatter
-        if self.protocol == 'netconf':
-            self.formatter = NETCONFFormatter()
-        else: # default is gNMI
-            self.formatter = GNMIFormatter()
-        
         # Determine the output stream
-        if self.file_type == 'stdout':
+        if self.file_type == OutputType.STDOUT:
             self.stream = sys.stdout
-        elif self.file_type == 'stderr':
+        elif self.file_type == OutputType.STDERR:
             self.stream = sys.stderr
-        else:
-            # If it's not stdout/stderr, treat it as a file path
-            self.stream = open(self.file_type, 'a')
+        elif self.file_type == OutputType.FILE:
+            self.stream = open(str(config.path), 'a')
             print(f"[Output] Created file sink: {self.file_type}")
+        else:
+            # default case is STDOUT
+            self.stream = sys.stdout
 
     def write(self, message):
         """Formats and writes the message to the defined stream"""
         raw_data = message.get('data')
+        protocol = message.get('protocol')
         sub_name = message.get('subscription_name', '')
 
-        if isinstance(raw_data, Exception):
-            self.stream.flush()
-            return
+        # Instantiate protocol formatter
+        if protocol == 'netconf':
+            self.formatter = NETCONFFormatter()
+        else: # default is gNMI
+            self.formatter = GNMIFormatter()
 
         if self.format in ['json', 'xml']:
             meta = {
@@ -71,7 +71,8 @@ class OutputHandler:
                 output_str = formatted_data
         elif self.format == 'text':
             formatted_data = self.formatter.format_text(raw_data)
-            output_str = f"\n--- [target: {message.get('target')}] ---\n{formatted_data}"
+            # just present it without any strings
+            output_str = f"\n{formatted_data}"
         else:
             output_str = str(message)
 

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rpc xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="102">
+  <edit-config>
+    <target>
+      <candidate/>
+    </target>
+    <test-option>test-then-set</test-option>
+    <error-option>stop-on-error</error-option>
+    <config>
+      <interfaces xmlns="http://openconfig.net/yang/interfaces" xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0">
+        <interface>
+          <name>mgmt0</name>
+          <config>
+            <name>mgmt0</name>
+            <description nc:operation="remove"/>
+          </config>
+        </interface>
+      </interfaces>
+    </config>
+  </edit-config>
+</rpc>
+
