@@ -1,0 +1,15 @@
+protocol: "netconf"
+
+targets:
+  172.20.20.2:830:
+    username: "admin"
+    password: "NokiaSrl1!"
+    operation: "edit-config"
+    target_datastore: "candidate"
+    config: "tests/netconf_delete_desc.xml"
+
+outputs:
+  default_output:
+    output-type: stdout
+    format: json
+

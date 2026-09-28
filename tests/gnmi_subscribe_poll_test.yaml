@@ -1,0 +1,24 @@
+protocol: "gnmi"
+insecure: true
+
+subscriptions:
+  system_and_interfaces_poll:
+    mode: "poll"
+    encoding: "json_ietf"
+    subscription:
+      path:
+        - "openconfig:/system/state/hostname"
+        - "openconfig:/interfaces/interface[name=mgmt0]/state/counters"
+
+targets:
+  172.20.20.2:57401:
+    username: "admin"
+    password: "NokiaSrl1!"
+    subscriptions:
+      - system_and_interfaces_poll
+
+outputs:
+  default_output:
+    output-type: stdout
+    format: json
+

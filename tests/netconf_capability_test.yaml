@@ -1,0 +1,14 @@
+protocol: "netconf"
+
+targets:
+  172.20.20.2:830:
+    username: "admin"
+    password: "NokiaSrl1!"
+    operation: "capability"
+
+outputs:
+  default_output:
+    output-type: file
+    path: "./tests/netconf_namespaces.json"
+    format: json
+

@@ -1,0 +1,16 @@
+protocol: "netconf"
+
+targets:
+  172.20.20.2:830:
+    username: "admin"
+    password: "NokiaSrl1!"
+    operation: "get-schema"
+    identifier: "openconfig-interfaces"
+    version: "2024-04-04"
+
+outputs:
+  default_output:
+    output-type: file
+    path: "./tests/openconfig-interfaces.yang"
+    format: text
+

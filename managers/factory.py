@@ -8,7 +8,8 @@ Currently supported common interfaces:
 * client picker: `ClientFactory`
 * simple validator: `ValidatorFactory`
 """
-from specs.client import GNMIClient, NetconfClient
+from specs.gnmi_client import GNMIClient
+from specs.netconf_client import NetconfClient
 from modules.validate import GNMIValidator
 from modules.security import SecurityModule
 

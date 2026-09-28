@@ -34,6 +34,5 @@ targets:
 
 outputs:
   log_file:
-    type: file
-    file-type: stdout
+    output-type: stdout
     format: json
