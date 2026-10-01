@@ -32,7 +32,6 @@ from config import (
     GnmiOptions,
     BaseProtocolOptions,
     NetconfOptions,
-    RootConfig,
     DeliveryConfig,
     SelectorConfig,
 )
@@ -147,7 +146,7 @@ class TestConfigModels(unittest.TestCase):
         self.assertEqual(nc_opts.target_datastore, "running")
         self.assertEqual(nc_opts.default_operation, "replace")
 
-    def test_polymorphic_protocol_options_and_root_config(self):
+    def test_polymorphic_protocol_options_and_subscribe_operation(self):
         # Base class inheritance and to_dict
         gnmi_opts = GnmiOptions(
             encoding="json_ietf",
@@ -198,25 +197,23 @@ class TestConfigModels(unittest.TestCase):
         with self.assertRaises(ValueError):
             NetconfOptions(error_option="invalid_err").validate()
 
-        # RootConfig validation
-        root_cfg = RootConfig(
+        # SubscribeOperation validation with polymorphic protocol_options
+        sub_op = SubscribeOperation(
+            selector=PathSelector(paths=["/interfaces"]),
             delivery=DeliveryConfig(mode=DeliveryMode.PERIODIC, interval=10),
-            operation=SubscribeOperation(
-                selector=PathSelector(paths=["/interfaces"]),
-                delivery=DeliveryPolicy(),
-                protocol_options=gnmi_opts,
-            ),
-            selectors=[SelectorConfig()],
             protocol_options=gnmi_opts,
         )
-        root_cfg.validate()
+        sub_op.validate()
+        self.assertEqual(sub_op.protocol_options.encoding, "json_ietf")
 
-        # RootConfig invalid protocol_options triggers ValueError
-        root_invalid = RootConfig(
-            protocol_options=GnmiOptions(sample_interval_ns=-10)
+        # SubscribeOperation invalid protocol_options triggers ValueError
+        sub_invalid = SubscribeOperation(
+            selector=PathSelector(paths=["/interfaces"]),
+            delivery=DeliveryPolicy(),
+            protocol_options=GnmiOptions(sample_interval_ns=-10),
         )
         with self.assertRaises(ValueError):
-            root_invalid.validate()
+            sub_invalid.validate()
 
     def test_session_config_delegation(self):
         conn = ConnectionConfig(target="10.0.0.1:9339", username="admin", password="pwd", insecure=True)

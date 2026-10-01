@@ -6,8 +6,6 @@ from config.model import (
     ExecutionConfig,
     SessionConfig,
     OutputConfig,
-    RootConfig,
-    ProtocolOptionsType,
 )
 from config.selectors import (
     Selector,
@@ -44,8 +42,6 @@ __all__ = [
     "ConnectionConfig",
     "ExecutionConfig",
     "SessionConfig",
-    "RootConfig",
-    "ProtocolOptionsType",
     "Selector",
     "SelectorConfig",
     "PathSelector",

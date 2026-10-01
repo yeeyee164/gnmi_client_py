@@ -99,7 +99,7 @@ class BaseProtocolOptions(ABC):
 ```
 
 #### Integration into `config/model.py`
-
+> NOTE: It is a prototype or example code structure
 ```
 from typing import Optional, Union
 from config.protocol_options.base import BaseProtocolOptions
