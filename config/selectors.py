@@ -4,7 +4,9 @@ from typing import Any, Tuple
 
 class Selector(ABC):
     """Base selector for target data identification."""
-    pass
+    def validate(self) -> None:
+        """Validate selector consistency."""
+        pass
 
 @dataclass(frozen=True, kw_only=True)
 class PathSelector(Selector):
@@ -29,3 +31,5 @@ class FilterSelector(Selector):
     expression: str
     filter_type: str = "xpath"  # xpath, subtree
 
+# Backward compatibility / spec alias
+SelectorConfig = Selector

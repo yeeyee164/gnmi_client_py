@@ -1,8 +1,10 @@
 from __future__ import annotations
 import os
 import json
+import time
+import queue
 import logging
-from typing import Iterator, Any, Optional
+from typing import Iterator, Any, Optional, List, Union
 
 try:
     import grpc
@@ -12,7 +14,8 @@ except ImportError:
     gnmi_pb2 = None
     gnmi_pb2_grpc = None
 
-from specs.base_client import BaseClient
+from specs.base_client import BaseClient, UnsupportedOperationError
+from specs.stream_types import StreamCommandType, StreamCommand, StreamContext, StreamEvent
 from modules.path import parse_path
 from modules.security import SecurityModule
 from config.operations import (
@@ -24,7 +27,7 @@ from config.operations import (
 )
 from config.selectors import PathSelector
 from config.delivery import DeliveryMode
-from config.protocol_options.gnmi import GNMIOptions
+from config.protocol_options import BaseProtocolOptions, GnmiOptions, GNMIOptions
 
 NANOSECOND = 1000000000
 
@@ -135,57 +138,224 @@ class GNMIClient(BaseClient):
 
         return self.set(updates=updates, replaces=replaces, deletes=deletes, prefix=prefix, encoding=enc)
 
-    def execute_subscribe(self, operation: SubscribeOperation) -> Iterator[gnmi_pb2.SubscribeResponse]:
-        """Executes Subscribe RPC adhering to SubscribeOperation."""
+    def _build_subscribe_generator(
+        self,
+        selectors: Any = None,
+        options: Optional[BaseProtocolOptions] = None,
+        context: Optional[StreamContext] = None,
+        operation: Optional[SubscribeOperation] = None,
+        **kwargs,
+    ) -> Iterator[gnmi_pb2.SubscribeRequest]:
+        """Constructs initial SubscribeRequest and yields bi-directional streaming requests."""
+        if gnmi_pb2 is None:
+            raise RuntimeError("gnmi_pb2 is not loaded")
+
+        if isinstance(selectors, SubscribeOperation):
+            operation = selectors
+            selectors = operation.selector
+
         paths = []
         prefix = ""
-        if isinstance(operation.selector, PathSelector):
-            paths = list(operation.selector.paths)
-            prefix = operation.selector.prefix
-
-        mode_map = {
-            DeliveryMode.PERIODIC: 'stream',
-            DeliveryMode.ON_CHANGE: 'stream',
-            DeliveryMode.SNAPSHOT: 'once',
-            DeliveryMode.POLL: 'poll',
-        }
-        stream_mode_map = {
-            DeliveryMode.PERIODIC: 'sample',
-            DeliveryMode.ON_CHANGE: 'on_change',
-            DeliveryMode.SNAPSHOT: 'sample',
-            DeliveryMode.POLL: 'sample',
-        }
-
-        d_mode = operation.delivery.mode
-        req_mode = mode_map.get(d_mode, 'stream')
-        stream_mode = stream_mode_map.get(d_mode, 'sample')
-
-        enc = self.encoding
+        mode = "stream"
+        stream_mode = "sample"
+        sample_interval_ns = 0
+        heartbeat_interval_ns = 0
+        suppress_redundant = False
         updates_only = False
-        if isinstance(operation.protocol_options, GNMIOptions):
-            if operation.protocol_options.encoding:
-                enc = operation.protocol_options.encoding
-            updates_only = operation.protocol_options.updates_only
+        enc = self.encoding
 
-        req_dict = {
-            'action': 'subscribe',
-            'operation': 'subscribe',
-            'mode': req_mode,
-            'stream_mode': stream_mode,
-            'sub_mode': stream_mode,
-            'paths': paths,
-            'prefix': prefix,
-            'sample_interval': operation.delivery.interval,
-            'heartbeat_interval': operation.delivery.heartbeat,
-            'suppress_redundant': operation.delivery.suppress_redundant,
-            'encoding': enc,
-            'updates_only': updates_only,
-        }
+        if operation is not None:
+            if isinstance(operation.selector, PathSelector):
+                paths = list(operation.selector.paths)
+                prefix = operation.selector.prefix
+            elif hasattr(operation.selector, 'paths'):
+                paths = list(operation.selector.paths)
 
-        def single_req_gen():
-            yield req_dict
+            mode_map = {
+                DeliveryMode.PERIODIC: 'stream',
+                DeliveryMode.ON_CHANGE: 'stream',
+                DeliveryMode.SNAPSHOT: 'once',
+                DeliveryMode.POLL: 'poll',
+                DeliveryMode.TARGET_DEFINED: 'stream',
+            }
+            stream_mode_map = {
+                DeliveryMode.PERIODIC: 'sample',
+                DeliveryMode.ON_CHANGE: 'on_change',
+                DeliveryMode.SNAPSHOT: 'sample',
+                DeliveryMode.POLL: 'sample',
+                DeliveryMode.TARGET_DEFINED: 'target_defined',
+            }
+            d_mode = operation.delivery.mode
+            mode = mode_map.get(d_mode, 'stream')
+            stream_mode = stream_mode_map.get(d_mode, 'sample')
 
-        return self.subscribe(single_req_gen())
+            sample_interval_ns = (operation.delivery.interval or 0) * NANOSECOND
+            heartbeat_interval_ns = (operation.delivery.heartbeat or 0) * NANOSECOND
+            suppress_redundant = operation.delivery.suppress_redundant
+
+            if options is None and operation.protocol_options is not None:
+                options = operation.protocol_options
+        else:
+            if isinstance(selectors, PathSelector):
+                paths = list(selectors.paths)
+                prefix = selectors.prefix
+            elif isinstance(selectors, (list, tuple)):
+                for sel in selectors:
+                    if isinstance(sel, PathSelector):
+                        paths.extend(list(sel.paths))
+                        if sel.prefix:
+                            prefix = sel.prefix
+                    elif isinstance(sel, str):
+                        paths.append(sel)
+                    elif hasattr(sel, 'paths'):
+                        paths.extend(list(sel.paths))
+            elif isinstance(selectors, str):
+                paths = [selectors]
+
+            if kwargs.get('mode'):
+                mode = str(kwargs.get('mode')).lower()
+            if kwargs.get('stream_mode') or kwargs.get('sub_mode'):
+                stream_mode = str(kwargs.get('stream_mode') or kwargs.get('sub_mode')).lower()
+            if kwargs.get('prefix'):
+                prefix = kwargs.get('prefix')
+            if kwargs.get('sample_interval'):
+                sample_interval_ns = int(kwargs.get('sample_interval')) * NANOSECOND
+            if kwargs.get('heartbeat_interval'):
+                heartbeat_interval_ns = int(kwargs.get('heartbeat_interval')) * NANOSECOND
+            if kwargs.get('suppress_redundant'):
+                suppress_redundant = bool(kwargs.get('suppress_redundant'))
+
+        if options is not None:
+            if hasattr(options, 'encoding') and options.encoding:
+                enc = options.encoding.value if hasattr(options.encoding, 'value') else str(options.encoding)
+            if hasattr(options, 'updates_only'):
+                updates_only = bool(options.updates_only)
+            if hasattr(options, 'sub_mode') and options.sub_mode:
+                stream_mode = options.sub_mode.value if hasattr(options.sub_mode, 'value') else str(options.sub_mode)
+            if hasattr(options, 'sample_interval_ns') and options.sample_interval_ns > 0:
+                sample_interval_ns = options.sample_interval_ns
+            if hasattr(options, 'heartbeat_interval_ns') and options.heartbeat_interval_ns > 0:
+                heartbeat_interval_ns = options.heartbeat_interval_ns
+            if hasattr(options, 'suppress_redundant'):
+                suppress_redundant = options.suppress_redundant
+
+        sub_list = gnmi_pb2.SubscriptionList()
+        if mode in ('once', 'snapshot'):
+            sub_list.mode = gnmi_pb2.SubscriptionList.ONCE
+        elif mode == 'poll':
+            sub_list.mode = gnmi_pb2.SubscriptionList.POLL
+        else:
+            sub_list.mode = gnmi_pb2.SubscriptionList.STREAM
+
+        sub_list.encoding = self.encoding_map.get(str(enc).lower(), gnmi_pb2.JSON_IETF if gnmi_pb2 else 4)
+        sub_list.updates_only = bool(updates_only)
+
+        if prefix:
+            sub_list.prefix.CopyFrom(parse_path(prefix))
+
+        for path_str in paths:
+            sub = sub_list.subscription.add()
+            sub.path.CopyFrom(parse_path(path_str))
+            if sub_list.mode == gnmi_pb2.SubscriptionList.STREAM:
+                smode = str(stream_mode).lower()
+                if smode == 'sample':
+                    sub.mode = gnmi_pb2.SubscriptionMode.SAMPLE
+                    sub.sample_interval = sample_interval_ns
+                    if heartbeat_interval_ns:
+                        sub.heartbeat_interval = heartbeat_interval_ns
+                    sub.suppress_redundant = suppress_redundant
+                elif smode == 'on_change':
+                    sub.mode = gnmi_pb2.SubscriptionMode.ON_CHANGE
+                    if heartbeat_interval_ns:
+                        sub.heartbeat_interval = heartbeat_interval_ns
+                else:
+                    sub.mode = gnmi_pb2.SubscriptionMode.TARGET_DEFINED
+
+        initial_req = gnmi_pb2.SubscribeRequest(subscribe=sub_list)
+        yield initial_req
+
+        if context is None:
+            return
+
+        while not context.is_cancelled:
+            try:
+                cmd = context.command_queue.get(timeout=0.2)
+                if cmd.command_type == StreamCommandType.POLL:
+                    poll_req = gnmi_pb2.SubscribeRequest()
+                    poll_req.poll.SetInParent()
+                    yield poll_req
+                elif cmd.command_type == StreamCommandType.CANCEL:
+                    break
+            except queue.Empty:
+                continue
+            except GeneratorExit:
+                break
+            except Exception as e:
+                logger.error(f"[GNMIClient] Subscription generator error: {e}")
+                break
+
+    def execute_subscribe(
+        self,
+        selectors: Any = None,
+        options: Optional[BaseProtocolOptions] = None,
+        context: Optional[StreamContext] = None,
+        operation: Optional[SubscribeOperation] = None,
+        **kwargs,
+    ) -> Iterator[StreamEvent]:
+        """Executes a streaming telemetry subscription via gRPC Bidirectional Streaming.
+
+        Yields:
+            StreamEvent: Protocol-agnostic telemetry event wrapping SubscribeResponse or error.
+        """
+        if gnmi_pb2 is None:
+            raise RuntimeError("gnmi_pb2 is not loaded")
+
+        if context is None:
+            context = StreamContext()
+
+        req_generator = self._build_subscribe_generator(
+            selectors=selectors,
+            options=options,
+            context=context,
+            operation=operation,
+            **kwargs,
+        )
+
+        try:
+            response_stream = self.stub.Subscribe(req_generator, metadata=self.metadata)
+            for response in response_stream:
+                if context.is_cancelled:
+                    cancel_func = getattr(response_stream, 'cancel', None)
+                    if callable(cancel_func):
+                        cancel_func()
+                    break
+
+                yield StreamEvent(
+                    protocol="gnmi",
+                    timestamp=time.time(),
+                    raw_payload=response,
+                    is_sync_marker=getattr(response, 'sync_response', False),
+                )
+        except grpc.RpcError as e:
+            if context.is_cancelled:
+                return
+            logger.error(f"[GNMIClient] gNMI Subscribe RPC error: {e}")
+            yield StreamEvent(
+                protocol="gnmi",
+                timestamp=time.time(),
+                raw_payload=None,
+                error=e,
+            )
+        except Exception as e:
+            if context.is_cancelled:
+                return
+            logger.error(f"[GNMIClient] gNMI Subscribe error: {e}")
+            yield StreamEvent(
+                protocol="gnmi",
+                timestamp=time.time(),
+                raw_payload=None,
+                error=e,
+            )
 
     # =========================================================================
     # Legacy Methods & Internal Helpers

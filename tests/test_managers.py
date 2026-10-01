@@ -63,6 +63,7 @@ from config import (
 from managers.manager import BaseRPCManager, UnaryManager, SubscriptionManager, ManagerFactory
 from managers.unary_worker import BaseUnaryWorker, GetWorker, SetWorker, CapabilityWorker
 from managers.subscribe_session import SubscribeSession
+from specs.stream_types import StreamEvent, StreamCommandType, StreamContext
 
 def build_sample_sessions():
     get_session_1 = SessionConfig(
@@ -382,6 +383,59 @@ class TestSemanticManagerSessionScoping(unittest.TestCase):
         self.assertIsInstance(mgr.sessions[1], SubscribeSession)
         self.assertFalse(mgr.sessions[0].is_poll_mode())
         self.assertTrue(mgr.sessions[1].is_poll_mode())
+
+    def test_subscribe_session_streaming_execution(self):
+        import queue
+        data_q = queue.Queue()
+        session = SubscribeSession(config=self.sub_1, data_queue=data_q)
+
+        mock_event1 = StreamEvent(
+            protocol="gnmi",
+            timestamp=123.456,
+            raw_payload={"update": "val1"},
+            is_sync_marker=False,
+        )
+        mock_event2 = StreamEvent(
+            protocol="gnmi",
+            timestamp=123.457,
+            raw_payload={"update": "val2"},
+            is_sync_marker=True,
+        )
+
+        mock_client = MagicMock()
+        mock_client.execute_subscribe.return_value = [mock_event1, mock_event2]
+
+        with patch('managers.subscribe_session.ClientFactory.get_client') as mock_factory:
+            mock_factory.return_value.__enter__.return_value = mock_client
+            session.start()
+
+        mock_client.execute_subscribe.assert_called_once_with(
+            operation=self.sub_1.operation,
+            context=session.stream_context,
+        )
+
+        self.assertEqual(data_q.qsize(), 2)
+        msg1 = data_q.get_nowait()
+        self.assertEqual(msg1['subscription_name'], 'sub_telemetry')
+        self.assertEqual(msg1['data'], {"update": "val1"})
+        self.assertFalse(msg1['is_sync_marker'])
+
+        msg2 = data_q.get_nowait()
+        self.assertEqual(msg2['data'], {"update": "val2"})
+        self.assertTrue(msg2['is_sync_marker'])
+
+    def test_subscribe_session_poll_dispatch(self):
+        session = SubscribeSession(config=self.sub_2)
+        self.assertTrue(session.is_poll_mode())
+
+        # Trigger poll
+        session.trigger_poll()
+        cmd = session.stream_context.command_queue.get_nowait()
+        self.assertEqual(cmd.command_type, StreamCommandType.POLL)
+
+        # Stop session
+        session.stop()
+        self.assertTrue(session.stream_context.is_cancelled)
 
 
 if __name__ == '__main__':

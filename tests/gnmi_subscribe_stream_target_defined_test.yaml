@@ -1,0 +1,24 @@
+protocol: "gnmi"
+insecure: true
+
+subscriptions:
+  target_defined_sub:
+    mode: "stream"
+    encoding: "json_ietf"
+    subscription:
+      path:
+        - "openconfig:/interfaces/interface[name=mgmt0]/config/description"
+        - "openconfig:/interfaces/interface[name=mgmt0]/state/counters"
+      mode: "target_defined"
+
+targets:
+  172.20.20.2:57401:
+    username: "admin"
+    password: "NokiaSrl1!"
+    subscriptions:
+      - target_defined_sub
+
+outputs:
+  default_output:
+    output-type: stdout
+    format: json

@@ -1,0 +1,32 @@
+protocol: "gnmi"
+insecure: true
+
+subscriptions:
+  hostname_once:
+    mode: "once"
+    encoding: "json_ietf"
+    subscription:
+      path:
+        - "openconfig:/system/state/hostname"
+
+  mgmt0_counters_sample:
+    mode: "stream"
+    encoding: "json_ietf"
+    subscription:
+      path:
+        - "openconfig:/interfaces/interface[name=mgmt0]/state/counters"
+      mode: "sample"
+      sample_interval: 3
+
+targets:
+  172.20.20.2:57401:
+    username: "admin"
+    password: "NokiaSrl1!"
+    subscriptions:
+      - hostname_once
+      - mgmt0_counters_sample
+
+outputs:
+  default_output:
+    output-type: stdout
+    format: json

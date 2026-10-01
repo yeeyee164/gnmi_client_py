@@ -1,26 +1,22 @@
 import time
-import json
 import hashlib
-import queue
-import traceback
 import logging
-import dataclasses
 from typing import Optional, Any
 
-from managers.factory import ClientFactory, ValidatorFactory
+from managers.factory import ClientFactory
 from util.utils import str_to_bytes
 from config.model import SessionConfig
 from config.operations import SubscribeOperation
-from config.selectors import PathSelector
 from config.delivery import DeliveryMode
-from config.protocol_options.gnmi import GNMIOptions
+from specs.stream_types import StreamContext, StreamEvent
 
 logger = logging.getLogger(__name__)
+
 
 class SubscribeSession:
     """
     Handles a single Subscribe service to a single target.
-    It doesn't know or care about other threads - need to handle critical sections.
+    Delegates streaming execution and transport control protocol-agnostically.
     """
 
     def __init__(self, target_ip=None, target_port=None, data_queue=None,
@@ -30,6 +26,8 @@ class SubscribeSession:
         self.data_queue = data_queue
         self.config = config
         self.session = config
+        self.selectors = None
+        self.protocol_options = None
 
         if config is not None:
             if isinstance(config, SessionConfig) or hasattr(config, 'connection'):
@@ -43,6 +41,8 @@ class SubscribeSession:
                 self.insecure = config.insecure
                 self.operation = config.operation
                 self.subscription_name = getattr(config.operation, 'subscription_name', 'default_sub')
+                self.selectors = getattr(config.operation, 'selector', None)
+                self.protocol_options = getattr(config.operation, 'protocol_options', None)
                 self.kwargs = dict(kwargs)
 
         self.debug = self.kwargs.get('debug', False)
@@ -50,85 +50,56 @@ class SubscribeSession:
 
         raw_id_str = f"{self.target_ip}:{self.target_port}:{self.subscription_name}:{time.time()}"
         self.session_id = hashlib.md5(str_to_bytes(raw_id_str)).hexdigest()[:10]
-        
-        self.is_running = False 
-        self.poll_queue = queue.Queue()
+
+        self.is_running = False
+        self.stream_context = StreamContext()
+        self._thread = None
+        self.timeout = self.kwargs.get('timeout', 10)
+        self.client = None
 
     def is_poll_mode(self) -> bool:
+        """Determines if the session is operating in POLL subscription mode."""
         if isinstance(self.operation, SubscribeOperation):
-            return self.operation.delivery.mode == DeliveryMode.POLL
-        return self.kwargs.get('mode', '').lower() == 'poll'
+            d_mode = getattr(self.operation.delivery, 'mode', None)
+            val = d_mode.value if hasattr(d_mode, 'value') else str(d_mode)
+            return val.lower() == 'poll'
+        return str(self.kwargs.get('mode', '')).lower() == 'poll'
 
-    def start(self):
+    def _handle_stream_event(self, event: StreamEvent) -> None:
+        """Processes incoming StreamEvent and forwards structured message to data_queue."""
+        if event.error is not None:
+            logger.error(f"[Worker {self.session_id} | {self.target_ip}] Stream event error: {event.error}")
+            if self.data_queue is not None:
+                self.data_queue.put({
+                    'session_id': self.session_id,
+                    'target': self.target,
+                    'subscription_name': self.subscription_name,
+                    'rpc': 'subscribe' if isinstance(self.operation, SubscribeOperation) else self.kwargs.get('operation', 'unknown'),
+                    'data': event.error,
+                    'protocol': event.protocol or self.protocol,
+                    'error': event.error,
+                })
+            return
+
+        payload = event.raw_payload if event.raw_payload is not None else event.data
+        if self.data_queue is not None:
+            self.data_queue.put({
+                'session_id': self.session_id,
+                'target': self.target,
+                'subscription_name': self.subscription_name,
+                'rpc': 'subscribe' if isinstance(self.operation, SubscribeOperation) else self.kwargs.get('operation', 'unknown'),
+                'data': payload,
+                'protocol': event.protocol or self.protocol,
+                'is_sync_marker': event.is_sync_marker,
+            })
+
+    def start(self) -> None:
+        """Starts streaming execution loop delegating to client.execute_subscribe."""
         self.is_running = True
         mode_str = self.operation.delivery.mode.value if isinstance(self.operation, SubscribeOperation) else self.kwargs.get('mode', '').upper()
         logger.debug(f"[Worker {self.session_id} | {self.target_ip}]"
-              f" Starting '{self.subscription_name}' ({mode_str}) session...")
+                     f" Starting '{self.subscription_name}' ({mode_str}) session...")
 
-        def request_generator():
-            try:
-                if isinstance(self.operation, SubscribeOperation):
-                    paths = []
-                    prefix = ""
-                    if isinstance(self.operation.selector, PathSelector):
-                        paths = list(self.operation.selector.paths)
-                        prefix = self.operation.selector.prefix
-
-                    mode_map = {
-                        DeliveryMode.PERIODIC: 'stream',
-                        DeliveryMode.ON_CHANGE: 'stream',
-                        DeliveryMode.SNAPSHOT: 'once',
-                        DeliveryMode.POLL: 'poll',
-                    }
-                    stream_mode_map = {
-                        DeliveryMode.PERIODIC: 'sample',
-                        DeliveryMode.ON_CHANGE: 'on_change',
-                        DeliveryMode.SNAPSHOT: 'sample',
-                        DeliveryMode.POLL: 'sample',
-                    }
-                    d_mode = self.operation.delivery.mode
-                    req_mode = mode_map.get(d_mode, 'stream')
-                    stream_mode = stream_mode_map.get(d_mode, 'sample')
-
-                    enc = "json_ietf"
-                    updates_only = False
-                    if isinstance(self.operation.protocol_options, GNMIOptions):
-                        enc = self.operation.protocol_options.encoding
-                        updates_only = self.operation.protocol_options.updates_only
-
-                    yield {
-                        'action': 'subscribe',
-                        'operation': 'subscribe',
-                        'mode': req_mode,
-                        'stream_mode': stream_mode,
-                        'sub_mode': stream_mode,
-                        'paths': paths,
-                        'prefix': prefix,
-                        'sample_interval': self.operation.delivery.interval,
-                        'heartbeat_interval': self.operation.delivery.heartbeat,
-                        'suppress_redundant': self.operation.delivery.suppress_redundant,
-                        'encoding': enc,
-                        'updates_only': updates_only,
-                        'protocol': self.protocol,
-                    }
-                else:
-                    yield {
-                        'action': self.kwargs.get('operation', 'unknown'),
-                        **self.kwargs
-                    }
-
-                while self.is_running:
-                    try:
-                        trigger = self.poll_queue.get(timeout=0.5)
-                        if trigger == "POLL":
-                            yield {'action': 'poll'}
-                    except queue.Empty:
-                        continue
-            except GeneratorExit:
-                pass
-            except Exception as e:
-                logger.error(f"\n[Worker {self.session_id}] Generator error: {e}")
-        
         try:
             client_kwargs = dict(self.kwargs) if hasattr(self, 'kwargs') and self.kwargs else {}
             for k in ['target', 'security', 'username', 'password', 'protocol']:
@@ -140,39 +111,53 @@ class SubscribeSession:
                 protocol=self.protocol, target=self.target,
                 username=self.username, password=self.password,
                 security=self.security, **client_kwargs) as client:
-                response_stream = client.subscribe(request_generator())
-                
-                for raw_response in response_stream:
-                    if not self.is_running:
-                        cancel_func = getattr(response_stream, 'cancel', None)
-                        if callable(cancel_func):
-                            cancel_func()
+                self.client = client
+
+                if isinstance(self.operation, SubscribeOperation):
+                    stream = client.execute_subscribe(
+                        operation=self.operation,
+                        context=self.stream_context,
+                    )
+                else:
+                    stream = client.execute_subscribe(
+                        selectors=self.selectors,
+                        options=self.protocol_options,
+                        context=self.stream_context,
+                        **self.kwargs,
+                    )
+
+                for event in stream:
+                    if not self.is_running or self.stream_context.is_cancelled:
                         break
-                        
-                    self.data_queue.put({
-                        'session_id': self.session_id,
-                        'target': self.target,
-                        'subscription_name': self.subscription_name,
-                        'rpc': 'subscribe' if isinstance(self.operation, SubscribeOperation) else self.kwargs.get('operation', 'unknown'),
-                        'data': raw_response,
-                        'protocol': self.protocol,
-                    })
-                    
+
+                    if isinstance(event, StreamEvent):
+                        self._handle_stream_event(event)
+                    else:
+                        self._handle_stream_event(StreamEvent(
+                            protocol=self.protocol,
+                            timestamp=time.time(),
+                            raw_payload=event,
+                        ))
+
         except Exception as e:
-            #traceback.print_stack()
-            #logger.error(f"[Worker {self.session_id} | {self.target_ip}] Error in '{self.subscription_name}': {e}")
-            # NOTE: It always invoked during the termination of POLL
-            pass
+            if not self.stream_context.is_cancelled:
+                logger.error(f"[Worker {self.session_id} | {self.target_ip}] Error in '{self.subscription_name}': {e}")
         finally:
             logger.info(f"[Worker {self.session_id} | {self.target_ip}] Disconnected from '{self.subscription_name}'.")
-    
-    def stop(self):
-        self.is_running = False
 
-    def trigger_poll(self):
-        """By calling this method, you can inject empty Poll message only if you have requested Poll."""
+    def stop(self) -> None:
+        """Stops the streaming session and cancels underlying stream context."""
+        self.is_running = False
+        if self.stream_context:
+            self.stream_context.cancel()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=self.timeout)
+
+    def trigger_poll(self) -> None:
+        """Triggers a poll cycle on the active subscription stream via StreamContext."""
         if self.is_poll_mode():
-            self.poll_queue.put("POLL")
+            if self.stream_context:
+                self.stream_context.request_poll()
         else:
             mode_desc = self.operation.delivery.mode.value if isinstance(self.operation, SubscribeOperation) else self.kwargs.get('mode', 'no')
             logger.warning(f"[Worker {self.session_id} | {self.target_ip}] Ignored polling trigger. Session is in '{mode_desc}' mode.")

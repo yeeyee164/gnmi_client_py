@@ -6,15 +6,19 @@ from config.model import (
     ExecutionConfig,
     SessionConfig,
     OutputConfig,
+    RootConfig,
+    ProtocolOptionsType,
 )
 from config.selectors import (
     Selector,
+    SelectorConfig,
     PathSelector,
     FilterSelector,
 )
 from config.delivery import (
     DeliveryMode,
     DeliveryPolicy,
+    DeliveryConfig,
 )
 from config.operations import (
     OperationConfig,
@@ -27,7 +31,11 @@ from config.operations import (
     SubscribeOperation,
 )
 from config.protocol_options import (
+    BaseProtocolOptions,
+    GnmiOptions,
     GNMIOptions,
+    GnmiEncoding,
+    GnmiSubscriptionMode,
     NetconfOptions,
 )
 
@@ -36,11 +44,15 @@ __all__ = [
     "ConnectionConfig",
     "ExecutionConfig",
     "SessionConfig",
+    "RootConfig",
+    "ProtocolOptionsType",
     "Selector",
+    "SelectorConfig",
     "PathSelector",
     "FilterSelector",
     "DeliveryMode",
     "DeliveryPolicy",
+    "DeliveryConfig",
     "OperationConfig",
     "CapabilitiesOperation",
     "GetSchemaOperation",
@@ -49,7 +61,10 @@ __all__ = [
     "Change",
     "SetOperation",
     "SubscribeOperation",
+    "BaseProtocolOptions",
+    "GnmiOptions",
     "GNMIOptions",
+    "GnmiEncoding",
+    "GnmiSubscriptionMode",
     "NetconfOptions",
 ]
-

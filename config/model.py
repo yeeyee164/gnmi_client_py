@@ -1,8 +1,15 @@
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional, Any
+from typing import Optional, Any, Union, List
 from modules.security import SecurityProfile
 from config.operations import OperationConfig
+from config.protocol_options.base import BaseProtocolOptions
+from config.protocol_options.gnmi import GnmiOptions
+from config.protocol_options.netconf import NetconfOptions
+from config.selectors import Selector, SelectorConfig
+from config.delivery import DeliveryPolicy, DeliveryConfig
+
+ProtocolOptionsType = Union[GnmiOptions, NetconfOptions, BaseProtocolOptions]
 
 class Protocol(str, Enum):
     NONE = "none"
@@ -189,6 +196,33 @@ class SessionConfig:
         if hasattr(self.operation, 'subscription_name'):
             return self.operation.subscription_name
         return "default"
+
+    def validate(self) -> None:
+        """Validate session parameters and underlying operation."""
+        if hasattr(self.operation, 'validate') and callable(self.operation.validate):
+            self.operation.validate()
+        elif hasattr(self.operation, 'protocol_options') and self.operation.protocol_options is not None:
+            if hasattr(self.operation.protocol_options, 'validate'):
+                self.operation.protocol_options.validate()
+
+@dataclass
+class RootConfig:
+    delivery: Optional[Union[DeliveryPolicy, DeliveryConfig]] = None
+    operation: Optional[OperationConfig] = None
+    selectors: List[Union[Selector, SelectorConfig]] = field(default_factory=list)
+    protocol_options: Optional[ProtocolOptionsType] = None
+
+    def validate(self) -> None:
+        """Validate root configuration and encapsulated components."""
+        if self.delivery is not None and hasattr(self.delivery, 'validate'):
+            self.delivery.validate()
+        if self.operation is not None and hasattr(self.operation, 'validate'):
+            self.operation.validate()
+        for sel in self.selectors:
+            if hasattr(sel, 'validate'):
+                sel.validate()
+        if self.protocol_options is not None:
+            self.protocol_options.validate()
 
 # ================
 # Output Classes

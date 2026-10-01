@@ -9,7 +9,8 @@ except ImportError:
     manager = None
     operations = None
 
-from specs.base_client import BaseClient
+from specs.base_client import BaseClient, UnsupportedOperationError
+from specs.stream_types import StreamContext, StreamEvent
 from modules.security import SecurityModule
 from config.operations import (
     CapabilitiesOperation,
@@ -20,7 +21,7 @@ from config.operations import (
     ChangeType,
 )
 from config.selectors import PathSelector, FilterSelector
-from config.protocol_options.netconf import NetconfOptions
+from config.protocol_options import BaseProtocolOptions, NetconfOptions
 
 NETCONF_BASE_NS = "urn:ietf:params:xml:ns:netconf:base:1.0"
 NETCONF_NS = {
@@ -161,9 +162,20 @@ class NetconfClient(BaseClient):
             removes=removes or None,
         )
 
-    def execute_subscribe(self, operation: SubscribeOperation) -> Iterator[Any]:
-        """Executes NETCONF Event Notifications (RFC 5277) based on SubscribeOperation."""
-        return self.subscribe(None)
+    def execute_subscribe(
+        self,
+        selectors: Any = None,
+        options: Optional[BaseProtocolOptions] = None,
+        context: Optional[StreamContext] = None,
+        operation: Optional[SubscribeOperation] = None,
+        **kwargs,
+    ) -> Iterator[StreamEvent]:
+        """Executes NETCONF Event Notifications (RFC 5277 / RFC 8639) based on SubscribeOperation.
+        Planned for a future milestone.
+        """
+        raise UnsupportedOperationError(
+            f"{self.__class__.__name__} does not support subscribe operations."
+        )
 
     # =========================================================================
     # Legacy Methods & Internal Helpers

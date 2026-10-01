@@ -29,7 +29,12 @@ from config import (
     SetOperation,
     SubscribeOperation,
     GNMIOptions,
+    GnmiOptions,
+    BaseProtocolOptions,
     NetconfOptions,
+    RootConfig,
+    DeliveryConfig,
+    SelectorConfig,
 )
 from modules.security import SecurityProfile
 
@@ -141,6 +146,77 @@ class TestConfigModels(unittest.TestCase):
         nc_opts = NetconfOptions(target_datastore="running", default_operation="replace")
         self.assertEqual(nc_opts.target_datastore, "running")
         self.assertEqual(nc_opts.default_operation, "replace")
+
+    def test_polymorphic_protocol_options_and_root_config(self):
+        # Base class inheritance and to_dict
+        gnmi_opts = GnmiOptions(
+            encoding="json_ietf",
+            sub_mode="sample",
+            sample_interval_ns=1000000,
+            heartbeat_interval_ns=5000000,
+            suppress_redundant=True,
+        )
+        self.assertIsInstance(gnmi_opts, BaseProtocolOptions)
+        gnmi_opts.validate()
+        d = gnmi_opts.to_dict()
+        self.assertEqual(d["encoding"], "json_ietf")
+        self.assertEqual(d["sub_mode"], "sample")
+        self.assertEqual(d["sample_interval_ns"], 1000000)
+
+        # GnmiOptions validation errors
+        with self.assertRaises(ValueError):
+            GnmiOptions(encoding="invalid_enc").validate()
+        with self.assertRaises(ValueError):
+            GnmiOptions(sub_mode="invalid_mode").validate()
+        with self.assertRaises(ValueError):
+            GnmiOptions(sample_interval_ns=-1).validate()
+        with self.assertRaises(ValueError):
+            GnmiOptions(heartbeat_interval_ns=-1).validate()
+
+        # NetconfOptions inheritance, synchronization, and to_dict
+        nc_opts = NetconfOptions(
+            target_datastore="candidate",
+            source="running",
+            default_operation="merge",
+            error_option="stop-on-error",
+            lock_target=True,
+        )
+        self.assertIsInstance(nc_opts, BaseProtocolOptions)
+        self.assertEqual(nc_opts.source_datastore, "running")
+        nc_opts.validate()
+        nc_dict = nc_opts.to_dict()
+        self.assertEqual(nc_dict["target_datastore"], "candidate")
+        self.assertTrue(nc_dict["lock_target"])
+
+        # NetconfOptions validation errors
+        with self.assertRaises(ValueError):
+            NetconfOptions(target_datastore="invalid_ds").validate()
+        with self.assertRaises(ValueError):
+            NetconfOptions(source="invalid_source").validate()
+        with self.assertRaises(ValueError):
+            NetconfOptions(default_operation="invalid_op").validate()
+        with self.assertRaises(ValueError):
+            NetconfOptions(error_option="invalid_err").validate()
+
+        # RootConfig validation
+        root_cfg = RootConfig(
+            delivery=DeliveryConfig(mode=DeliveryMode.PERIODIC, interval=10),
+            operation=SubscribeOperation(
+                selector=PathSelector(paths=["/interfaces"]),
+                delivery=DeliveryPolicy(),
+                protocol_options=gnmi_opts,
+            ),
+            selectors=[SelectorConfig()],
+            protocol_options=gnmi_opts,
+        )
+        root_cfg.validate()
+
+        # RootConfig invalid protocol_options triggers ValueError
+        root_invalid = RootConfig(
+            protocol_options=GnmiOptions(sample_interval_ns=-10)
+        )
+        with self.assertRaises(ValueError):
+            root_invalid.validate()
 
     def test_session_config_delegation(self):
         conn = ConnectionConfig(target="10.0.0.1:9339", username="admin", password="pwd", insecure=True)
