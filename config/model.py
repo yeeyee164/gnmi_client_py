@@ -1,8 +1,13 @@
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional, Any
+from typing import Optional, Any, Union, List
 from modules.security import SecurityProfile
 from config.operations import OperationConfig
+from config.protocol_options.base import BaseProtocolOptions
+from config.protocol_options.gnmi import GnmiOptions
+from config.protocol_options.netconf import NetconfOptions
+from config.selectors import Selector, SelectorConfig
+from config.delivery import DeliveryPolicy, DeliveryConfig
 
 class Protocol(str, Enum):
     NONE = "none"
@@ -189,6 +194,14 @@ class SessionConfig:
         if hasattr(self.operation, 'subscription_name'):
             return self.operation.subscription_name
         return "default"
+
+    def validate(self) -> None:
+        """Validate session parameters and underlying operation."""
+        if hasattr(self.operation, 'validate') and callable(self.operation.validate):
+            self.operation.validate()
+        elif hasattr(self.operation, 'protocol_options') and self.operation.protocol_options is not None:
+            if hasattr(self.operation.protocol_options, 'validate'):
+                self.operation.protocol_options.validate()
 
 # ================
 # Output Classes

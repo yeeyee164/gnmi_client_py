@@ -320,6 +320,8 @@ class CLIConfigBuilder(ConfigBuilder):
                         del_mode = DeliveryMode.POLL
                     elif sub_mode_str == 'on_change':
                         del_mode = DeliveryMode.ON_CHANGE
+                    elif sub_mode_str == 'target_defined':
+                        del_mode = DeliveryMode.TARGET_DEFINED
                     else:
                         del_mode = DeliveryMode.PERIODIC
 
@@ -336,7 +338,7 @@ class CLIConfigBuilder(ConfigBuilder):
                         selector=PathSelector(paths=tuple(paths), prefix=prefix),
                         delivery=del_policy,
                         subscription_name="cli_execution",
-                        protocol_options=GNMIOptions(encoding=encoding, updates_only=updates_only)
+                        protocol_options=GNMIOptions(encoding=encoding, updates_only=updates_only, sub_mode=sub_mode_str)
                     )
                 else:
                     raise ValueError(f"Unknown gNMI operation: {operation}")
@@ -580,7 +582,9 @@ class FileConfigBuilder(ConfigBuilder):
 
                     d_mode = DeliveryMode.SNAPSHOT if named_sub.get('mode') == 'once' else (
                         DeliveryMode.POLL if named_sub.get('mode') == 'poll' else (
-                            DeliveryMode.ON_CHANGE if sub_mode == 'on_change' else DeliveryMode.PERIODIC
+                            DeliveryMode.ON_CHANGE if sub_mode == 'on_change' else (
+                                DeliveryMode.TARGET_DEFINED if sub_mode == 'target_defined' else DeliveryMode.PERIODIC
+                            )
                         )
                     )
                     del_policy = DeliveryPolicy(
@@ -595,7 +599,8 @@ class FileConfigBuilder(ConfigBuilder):
                         subscription_name=sub_name,
                         protocol_options=GNMIOptions(
                             encoding=named_sub.get('encoding', 'json_ietf'),
-                            updates_only=update_only
+                            updates_only=update_only,
+                            sub_mode=sub_mode,
                         )
                     )
                     session = SessionConfig(

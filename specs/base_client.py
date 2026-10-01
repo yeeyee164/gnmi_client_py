@@ -1,6 +1,6 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
-from typing import Iterator, Any, Optional
+from typing import Iterator, Any, Optional, Union, List
 
 from config.operations import (
     CapabilitiesOperation,
@@ -9,6 +9,15 @@ from config.operations import (
     SubscribeOperation,
     GetSchemaOperation,
 )
+from config.protocol_options.base import BaseProtocolOptions
+from config.selectors import Selector
+from specs.stream_types import StreamContext, StreamEvent
+
+
+class UnsupportedOperationError(NotImplementedError):
+    """Raised when an operation is not supported by a protocol client."""
+    pass
+
 
 class BaseClient(ABC):
     """
@@ -31,20 +40,41 @@ class BaseClient(ABC):
 
     def execute_capabilities(self, operation: CapabilitiesOperation) -> Any:
         """Executes capabilities discovery based on CapabilitiesOperation."""
-        return NotImplementedError("execute_capabilities must be implemented by concrete client")
+        raise UnsupportedOperationError(
+            f"{self.__class__.__name__} does not support capabilities operations."
+        )
 
     def execute_get(self, operation: GetOperation) -> Any:
         """Executes a get/read operation based on GetOperation."""
-        raise NotImplementedError("execute_get must be implemented by concrete client")
+        raise UnsupportedOperationError(
+            f"{self.__class__.__name__} does not support get operations."
+        )
 
     def execute_set(self, operation: SetOperation) -> Any:
         """Executes a set/edit operation based on SetOperation."""
-        raise NotImplementedError("execute_set must be implemented by concrete client")
+        raise UnsupportedOperationError(
+            f"{self.__class__.__name__} does not support set operations."
+        )
 
-    def execute_subscribe(self, operation: SubscribeOperation) -> Iterator[Any]:
-        """Executes a streaming telemetry / notification operation based on SubscribeOperation."""
-        raise NotImplementedError("execute_subscribe must be implemented by concrete client")
+    def execute_subscribe(
+        self,
+        selectors: Any = None,
+        options: Optional[BaseProtocolOptions] = None,
+        context: Optional[StreamContext] = None,
+        operation: Optional[SubscribeOperation] = None,
+        **kwargs,
+    ) -> Iterator[StreamEvent]:
+        """Execute a telemetry streaming session.
+
+        Raises:
+            UnsupportedOperationError: If the protocol handler does not support streaming.
+        """
+        raise UnsupportedOperationError(
+            f"{self.__class__.__name__} does not support subscribe operations."
+        )
 
     def execute_schema(self, operation: GetSchemaOperation) -> Any:
         """Executes schema retrieval based on GetSchemaOperation."""
-        raise NotImplementedError("execute_schema must be implemented by concrete client")
+        raise UnsupportedOperationError(
+            f"{self.__class__.__name__} does not support schema operations."
+        )

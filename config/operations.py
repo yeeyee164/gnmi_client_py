@@ -1,12 +1,17 @@
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Optional, Union
 from config.selectors import Selector, PathSelector
 from config.delivery import DeliveryPolicy
+from config.protocol_options.base import BaseProtocolOptions
 
 class OperationConfig:
     """Base marker for all semantic operational intents."""
-    pass
+    def validate(self) -> None:
+        """Validate operational intent and encapsulated options."""
+        if hasattr(self, 'protocol_options') and self.protocol_options is not None:
+            if hasattr(self.protocol_options, 'validate'):
+                self.protocol_options.validate()
 
 @dataclass(frozen=True, kw_only=True)
 class CapabilitiesOperation(OperationConfig):
@@ -25,7 +30,13 @@ class GetOperation(OperationConfig):
     """Retrieval of operational or configuration state."""
     selector: Selector
     read_scope: str = "all"  # all, config, state, operational
-    protocol_options: Any = None
+    protocol_options: Optional[BaseProtocolOptions] = None
+
+    def validate(self) -> None:
+        if hasattr(self.selector, 'validate'):
+            self.selector.validate()
+        if self.protocol_options is not None and hasattr(self.protocol_options, 'validate'):
+            self.protocol_options.validate()
 
 class ChangeType(str, Enum):
     MERGE = "merge"
@@ -49,9 +60,9 @@ class SetOperation(OperationConfig):
     """Mutation of configuration datastores."""
     changes: tuple[Change, ...] = ()
     prefix: str = ""
-    protocol_options: Any = None
+    protocol_options: Optional[BaseProtocolOptions] = None
 
-    def __init__(self, changes: Any = (), prefix: str = "", protocol_options: Any = None, **kwargs):
+    def __init__(self, changes: Any = (), prefix: str = "", protocol_options: Optional[BaseProtocolOptions] = None, **kwargs):
         c = kwargs.get('changes', changes)
         pr = kwargs.get('prefix', prefix)
         po = kwargs.get('protocol_options', protocol_options)
@@ -64,10 +75,22 @@ class SetOperation(OperationConfig):
         object.__setattr__(self, 'prefix', pr)
         object.__setattr__(self, 'protocol_options', po)
 
+    def validate(self) -> None:
+        if self.protocol_options is not None and hasattr(self.protocol_options, 'validate'):
+            self.protocol_options.validate()
+
 @dataclass(frozen=True, kw_only=True)
 class SubscribeOperation(OperationConfig):
     """Continuous or snapshot data subscription."""
     selector: Selector
     delivery: DeliveryPolicy
     subscription_name: str = "default"
-    protocol_options: Any = None
+    protocol_options: Optional[BaseProtocolOptions] = None
+
+    def validate(self) -> None:
+        if hasattr(self.selector, 'validate'):
+            self.selector.validate()
+        if hasattr(self.delivery, 'validate'):
+            self.delivery.validate()
+        if self.protocol_options is not None and hasattr(self.protocol_options, 'validate'):
+            self.protocol_options.validate()
