@@ -32,7 +32,6 @@ from config import (
     GnmiOptions,
     BaseProtocolOptions,
     NetconfOptions,
-    DeliveryConfig,
     SelectorConfig,
 )
 from modules.security import SecurityProfile
@@ -200,7 +199,7 @@ class TestConfigModels(unittest.TestCase):
         # SubscribeOperation validation with polymorphic protocol_options
         sub_op = SubscribeOperation(
             selector=PathSelector(paths=["/interfaces"]),
-            delivery=DeliveryConfig(mode=DeliveryMode.PERIODIC, interval=10),
+            delivery=DeliveryPolicy(mode=DeliveryMode.PERIODIC, interval=10),
             protocol_options=gnmi_opts,
         )
         sub_op.validate()
