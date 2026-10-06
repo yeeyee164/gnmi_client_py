@@ -17,7 +17,8 @@ In the early architecture of `gnmi_client_py`, telemetry streaming options direc
 2. **Unified Protocol Translation Layer**:
    Each protocol client implementation (`GNMIClient`, `NetconfClient`, `RestconfClient`) becomes responsible for mapping neutral delivery policies into wire-specific frames, headers, and RPC stubs.
 3. **Replace all legacy notations**:
-   Replace all enum values previously defined in `DeliveryMode` as described here. But do not modify user interfaces — CLI and YAML.  
+   Replace all enum values previously defined in `DeliveryMode` as described here. But do not modify user interfaces — CLI and YAML.
+   The mapping between protocol-specific name and `DeliveryMode` should provide at `./ui/cmd.py`.
 
 ---
 
@@ -68,12 +69,20 @@ The engine enforces strict worker agnosticism: managers and configuration models
 
 #### gNMI Translation Example (`specs/gnmi_client.py`)
 ```python
+# mapped enum Mode defined at `SubscriptionList`
 MODE_TO_GNMI_LIST_MODE = {
     DeliveryMode.PERIODIC: gnmi_pb2.SubscriptionList.STREAM,
     DeliveryMode.EVENT_DRIVEN: gnmi_pb2.SubscriptionList.STREAM,
     DeliveryMode.SERVER_DETERMINED: gnmi_pb2.SubscriptionList.STREAM,
     DeliveryMode.SNAPSHOT: gnmi_pb2.SubscriptionList.ONCE,
     DeliveryMode.ON_DEMAND: gnmi_pb2.SubscriptionList.POLL,
+}
+
+# mapped enum SubscriptionMode (a.k.a. sub-mode)
+MODE_TO_GNMI_SUB_MODE = {
+    DeliveryMode.PERIODIC: gnmi_pb2.SubscriptionList.SAMPLE,
+    DeliveryMode.EVENT_DRIVEN: gnmi_pb2.SubscriptionList.ON_CHANGE,
+    DeliveryMode.SERVER_DETERMINED: gnmi_pb2.SubscriptionList.TARGET_DEFINED,
 }
 ```
 
@@ -109,7 +118,7 @@ def _build_yang_push_rpc(self, policy: DeliveryPolicy, path: str) -> str:
 ## 4. Normalization and Configuration Parsing
 
 ### 4.1 Input Normalization in `DeliveryPolicy`
-Users may provide delivery modes via YAML configurations or CLI flags using different casing or delimiters (`event-driven` vs `event_driven` vs `EVENT_DRIVEN`). 
+Users may provide delivery modes via YAML configurations or CLI flags using different casing or delimiters (For example, `subscription: mode: "on_change"` from gNMI SubscribeRequest which represents `EVENT_DRIVEN`). 
 
 [`DeliveryPolicy`](../config/delivery.py#4) provides automatic normalization:
 
@@ -119,25 +128,7 @@ class DeliveryPolicy:
     mode: DeliveryMode = DeliveryMode.PERIODIC
     interval: int = 0         # Sample interval in seconds
     heartbeat: int = 0        # Heartbeat interval in seconds
-    suppress_redundant: bool = False
-
-    @classmethod
-    def from_raw(cls, mode: Union[str, DeliveryMode], **kwargs) -> "DeliveryPolicy":
-        """Factory method accepting string or enum with delimiter normalization."""
-        if isinstance(mode, str):
-            norm = mode.strip().lower().replace("_", "-")
-            # Map legacy gNMI strings
-            legacy_map = {
-                "sample": DeliveryMode.PERIODIC,
-                "on-change": DeliveryMode.EVENT_DRIVEN,
-                "once": DeliveryMode.SNAPSHOT,
-                "poll": DeliveryMode.ON_DEMAND,
-                "target-defined": DeliveryMode.SERVER_DETERMINED,
-            }
-            resolved_mode = legacy_map.get(norm, DeliveryMode(norm))
-        else:
-            resolved_mode = mode
-        return cls(mode=resolved_mode, **kwargs)
+    suppress_redundant: bool = False # Ignore unchanged events if set True
 
     def validate(self) -> None:
         if self.interval < 0:
@@ -159,11 +150,11 @@ graph TD
 ```
 
 ### Phase 1: Enum Aliasing & Core Delivery Policy Refinement
-- **Objective:** Finalize [`config/delivery.py`](file:///home/vbx/.gemini/antigravity/worktrees/gnmi_client_py/lunar_comet_warps_19h47/config/delivery.py) with `SERVER_DETERMINED`, `ON_DEMAND`, and complete Python Enum aliases.
+- **Objective:** Finalize [`config/delivery.py`](../config/delivery.py) with `SERVER_DETERMINED`, `ON_DEMAND`, and complete Python Enum aliases.
 - **Deliverables:**
   - Update `DeliveryMode` in `config/delivery.py`.
-  - Add `DeliveryPolicy.from_raw()` or normalization helper.
-  - Verify that existing references like `DeliveryMode.POLL` and `DeliveryMode.ON_CHANGE` resolve without `AttributeError`.
+  - Add normalization helper function to each defined interfaces such as `../ui/cmd.py`.
+  - Check that existing old-references like `DeliveryMode.POLL` and `DeliveryMode.ON_CHANGE` substituted to updated `DeliveryMode` cleanly.
 
 ### Phase 2: Protocol Layer Mapping & CLI/YAML Integration
 - **Objective:** Synchronize `specs/gnmi_client.py` and `ui/cmd.py` with the updated enum.
@@ -175,7 +166,6 @@ graph TD
 - **Objective:** Ensure all unit and integration tests pass without warnings or failures.
 - **Deliverables:**
   - Update tests in `tests/test_config_models.py` and `tests/test_managers.py`.
-  - Add explicit unit tests verifying enum alias equivalence (e.g. `DeliveryMode.POLL is DeliveryMode.ON_DEMAND`).
   - Verify 100% test pass rate across the full suite (95+ tests).
 
 ### Phase 4: NETCONF Subscriptions (RFC 5277 & RFC 8641)
@@ -197,7 +187,7 @@ graph TD
 
 | Verification Check | Target / Threshold | Gate Criteria |
 | :--- | :--- | :--- |
-| **Enum Aliasing Equivalence** | `DeliveryMode.ON_CHANGE == DeliveryMode.EVENT_DRIVEN`<br>`DeliveryMode.POLL == DeliveryMode.ON_DEMAND`<br>`DeliveryMode.TARGET_DEFINED == DeliveryMode.SERVER_DETERMINED` | All assertions pass |
+| **Enum Translation Equivalence(gNMI)** | `"on_change" -> DeliveryMode.EVENT_DRIVEN -> gnmi_pb2.SubscriptionMode.ON_CHANGE"`<br>`"poll" -> DeliveryMode.ON_DEMAND -> gnmi_pb2.SubscriptionMode.POLL`<br>`"target_defined" -> DeliveryMode.SERVER_DETERMINED -> gnmi_pb2.SubscriptionMode.TARGET_DEFINED`<br>`"sample" -> DeliveryMode.PERIODIC -> gnmi_pb2.SubscriptionMode.SAMPLE`<br>`"once" -> DeliveryMode.SNAPSHOT -> gnmi_pb2.SubscriptionMode.ONCE` | All assertions pass |
 | **Python Unit Tests** | `pytest tests/` | 95 / 95 passing, 0 failures, 0 regressions |
 | **Live Target Verification** | Nokia SRLinux 25.10.4 (`172.20.20.2:57401`) | All modes (Periodic, Event-Driven, Snapshot, On-Demand, Server-Determined) verify cleanly |
 | **YAML Configuration Support** | Use it as-is presented | Parse to identical `SessionConfig` models |

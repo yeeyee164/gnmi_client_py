@@ -33,6 +33,23 @@ NANOSECOND = 1000000000
 
 logger = logging.getLogger(__name__)
 
+if gnmi_pb2 is not None:
+    MODE_TO_GNMI_LIST_MODE = {
+        DeliveryMode.PERIODIC: gnmi_pb2.SubscriptionList.STREAM,
+        DeliveryMode.EVENT_DRIVEN: gnmi_pb2.SubscriptionList.STREAM,
+        DeliveryMode.SERVER_DETERMINED: gnmi_pb2.SubscriptionList.STREAM,
+        DeliveryMode.SNAPSHOT: gnmi_pb2.SubscriptionList.ONCE,
+        DeliveryMode.ON_DEMAND: gnmi_pb2.SubscriptionList.POLL,
+    }
+    MODE_TO_GNMI_SUB_MODE = {
+        DeliveryMode.PERIODIC: gnmi_pb2.SubscriptionMode.SAMPLE,
+        DeliveryMode.EVENT_DRIVEN: gnmi_pb2.SubscriptionMode.ON_CHANGE,
+        DeliveryMode.SERVER_DETERMINED: gnmi_pb2.SubscriptionMode.TARGET_DEFINED,
+    }
+else:
+    MODE_TO_GNMI_LIST_MODE = {}
+    MODE_TO_GNMI_SUB_MODE = {}
+
 class GNMIClient(BaseClient):
     """
     A gNMI client that support gNMI Services.
@@ -156,8 +173,8 @@ class GNMIClient(BaseClient):
 
         paths = []
         prefix = ""
-        mode = "stream"
-        stream_mode = "sample"
+        list_mode = gnmi_pb2.SubscriptionList.STREAM
+        gnmi_sub_mode = gnmi_pb2.SubscriptionMode.SAMPLE
         sample_interval_ns = 0
         heartbeat_interval_ns = 0
         suppress_redundant = False
@@ -171,23 +188,9 @@ class GNMIClient(BaseClient):
             elif hasattr(operation.selector, 'paths'):
                 paths = list(operation.selector.paths)
 
-            mode_map = {
-                DeliveryMode.PERIODIC: 'stream',
-                DeliveryMode.ON_CHANGE: 'stream',
-                DeliveryMode.SNAPSHOT: 'once',
-                DeliveryMode.POLL: 'poll',
-                DeliveryMode.TARGET_DEFINED: 'stream',
-            }
-            stream_mode_map = {
-                DeliveryMode.PERIODIC: 'sample',
-                DeliveryMode.ON_CHANGE: 'on_change',
-                DeliveryMode.SNAPSHOT: 'sample',
-                DeliveryMode.POLL: 'sample',
-                DeliveryMode.TARGET_DEFINED: 'target_defined',
-            }
             d_mode = operation.delivery.mode
-            mode = mode_map.get(d_mode, 'stream')
-            stream_mode = stream_mode_map.get(d_mode, 'sample')
+            list_mode = MODE_TO_GNMI_LIST_MODE.get(d_mode, gnmi_pb2.SubscriptionList.STREAM)
+            gnmi_sub_mode = MODE_TO_GNMI_SUB_MODE.get(d_mode, gnmi_pb2.SubscriptionMode.TARGET_DEFINED)
 
             sample_interval_ns = (operation.delivery.interval or 0) * NANOSECOND
             heartbeat_interval_ns = (operation.delivery.heartbeat or 0) * NANOSECOND
@@ -212,10 +215,22 @@ class GNMIClient(BaseClient):
             elif isinstance(selectors, str):
                 paths = [selectors]
 
-            if kwargs.get('mode'):
-                mode = str(kwargs.get('mode')).lower()
-            if kwargs.get('stream_mode') or kwargs.get('sub_mode'):
-                stream_mode = str(kwargs.get('stream_mode') or kwargs.get('sub_mode')).lower()
+            legacy_mode = str(kwargs.get('mode', 'stream')).lower()
+            if legacy_mode in ('once', 'snapshot'):
+                list_mode = gnmi_pb2.SubscriptionList.ONCE
+            elif legacy_mode in ('poll', 'on_demand'):
+                list_mode = gnmi_pb2.SubscriptionList.POLL
+            else:
+                list_mode = gnmi_pb2.SubscriptionList.STREAM
+
+            legacy_sub_mode = str(kwargs.get('stream_mode') or kwargs.get('sub_mode') or 'sample').lower()
+            if legacy_sub_mode == 'sample':
+                gnmi_sub_mode = gnmi_pb2.SubscriptionMode.SAMPLE
+            elif legacy_sub_mode == 'on_change':
+                gnmi_sub_mode = gnmi_pb2.SubscriptionMode.ON_CHANGE
+            else:
+                gnmi_sub_mode = gnmi_pb2.SubscriptionMode.TARGET_DEFINED
+
             if kwargs.get('prefix'):
                 prefix = kwargs.get('prefix')
             if kwargs.get('sample_interval'):
@@ -230,8 +245,14 @@ class GNMIClient(BaseClient):
                 enc = options.encoding.value if hasattr(options.encoding, 'value') else str(options.encoding)
             if hasattr(options, 'updates_only'):
                 updates_only = bool(options.updates_only)
-            if hasattr(options, 'sub_mode') and options.sub_mode:
-                stream_mode = options.sub_mode.value if hasattr(options.sub_mode, 'value') else str(options.sub_mode)
+            if hasattr(options, 'sub_mode') and options.sub_mode and (operation is None or list_mode == gnmi_pb2.SubscriptionList.STREAM):
+                sm = options.sub_mode.value if hasattr(options.sub_mode, 'value') else str(options.sub_mode).lower()
+                if sm == 'sample':
+                    gnmi_sub_mode = gnmi_pb2.SubscriptionMode.SAMPLE
+                elif sm == 'on_change':
+                    gnmi_sub_mode = gnmi_pb2.SubscriptionMode.ON_CHANGE
+                elif sm == 'target_defined':
+                    gnmi_sub_mode = gnmi_pb2.SubscriptionMode.TARGET_DEFINED
             if hasattr(options, 'sample_interval_ns') and options.sample_interval_ns > 0:
                 sample_interval_ns = options.sample_interval_ns
             if hasattr(options, 'heartbeat_interval_ns') and options.heartbeat_interval_ns > 0:
@@ -240,13 +261,7 @@ class GNMIClient(BaseClient):
                 suppress_redundant = options.suppress_redundant
 
         sub_list = gnmi_pb2.SubscriptionList()
-        if mode in ('once', 'snapshot'):
-            sub_list.mode = gnmi_pb2.SubscriptionList.ONCE
-        elif mode == 'poll':
-            sub_list.mode = gnmi_pb2.SubscriptionList.POLL
-        else:
-            sub_list.mode = gnmi_pb2.SubscriptionList.STREAM
-
+        sub_list.mode = list_mode
         sub_list.encoding = self.encoding_map.get(str(enc).lower(), gnmi_pb2.JSON_IETF if gnmi_pb2 else 4)
         sub_list.updates_only = bool(updates_only)
 
@@ -257,15 +272,13 @@ class GNMIClient(BaseClient):
             sub = sub_list.subscription.add()
             sub.path.CopyFrom(parse_path(path_str))
             if sub_list.mode == gnmi_pb2.SubscriptionList.STREAM:
-                smode = str(stream_mode).lower()
-                if smode == 'sample':
-                    sub.mode = gnmi_pb2.SubscriptionMode.SAMPLE
+                sub.mode = gnmi_sub_mode
+                if gnmi_sub_mode == gnmi_pb2.SubscriptionMode.SAMPLE:
                     sub.sample_interval = sample_interval_ns
                     if heartbeat_interval_ns:
                         sub.heartbeat_interval = heartbeat_interval_ns
                     sub.suppress_redundant = suppress_redundant
-                elif smode == 'on_change':
-                    sub.mode = gnmi_pb2.SubscriptionMode.ON_CHANGE
+                elif gnmi_sub_mode == gnmi_pb2.SubscriptionMode.ON_CHANGE:
                     if heartbeat_interval_ns:
                         sub.heartbeat_interval = heartbeat_interval_ns
                 else:

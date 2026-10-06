@@ -1,9 +1,15 @@
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional, Union
+from typing import Optional
 
 
 class DeliveryMode(str, Enum):
+    """Protocol-neutral telemetry delivery semantics.
+
+    Wire-protocol vocabularies (e.g. gNMI ``ONCE``/``POLL``/``ON_CHANGE``) must be
+    translated into these members at the interface layer (``ui/cmd.py``) and
+    translated back into wire frames by each protocol client implementation.
+    """
     # Core Protocol-Neutral Members (RFC 8641 / YANG-Push)
     PERIODIC = "periodic"                  # Time-interval sampling (RFC 8641 / gNMI SAMPLE)
     EVENT_DRIVEN = "event_driven"          # State mutations & notifications (RFC 8641 / RFC 5277 / gNMI ON_CHANGE)
@@ -31,16 +37,14 @@ class DeliveryPolicy:
 
     def __post_init__(self) -> None:
         if isinstance(self.mode, str) and not isinstance(self.mode, DeliveryMode):
-            object.__setattr__(self, "mode", DeliveryMode(self.mode))
-
-    @classmethod
-    def from_raw(cls, mode: Union[str, DeliveryMode], **kwargs) -> "DeliveryPolicy":
-        """Factory method accepting string or DeliveryMode."""
-        if isinstance(mode, str):
-            resolved_mode = DeliveryMode(mode)
-        else:
-            resolved_mode = mode
-        return cls(mode=resolved_mode, **kwargs)
+            try:
+                resolved = DeliveryMode(self.mode)
+            except ValueError:
+                valid = ", ".join(m.value for m in DeliveryMode)
+                raise ValueError(
+                    f"Invalid delivery mode '{self.mode}'. Must be one of: {valid}"
+                ) from None
+            object.__setattr__(self, "mode", resolved)
 
     def validate(self) -> None:
         """Validate delivery policy values."""

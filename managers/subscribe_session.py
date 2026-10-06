@@ -28,6 +28,16 @@ class SubscribeSession:
         self.session = config
         self.selectors = None
         self.protocol_options = None
+        self.kwargs = dict(kwargs)
+        self.target_ip = target_ip
+        self.target_port = target_port
+        self.username = username
+        self.password = password
+        self.protocol = protocol
+        self.security = security
+        self.insecure = kwargs.get('insecure', False)
+        self.operation = None
+        self.subscription_name = subscription_name
 
         if config is not None:
             if isinstance(config, SessionConfig) or hasattr(config, 'connection'):
@@ -43,7 +53,6 @@ class SubscribeSession:
                 self.subscription_name = getattr(config.operation, 'subscription_name', 'default_sub')
                 self.selectors = getattr(config.operation, 'selector', None)
                 self.protocol_options = getattr(config.operation, 'protocol_options', None)
-                self.kwargs = dict(kwargs)
 
         self.debug = self.kwargs.get('debug', False)
         self.target = f'{self.target_ip}:{self.target_port}'
@@ -58,11 +67,9 @@ class SubscribeSession:
         self.client = None
 
     def is_poll_mode(self) -> bool:
-        """Determines if the session is operating in POLL subscription mode."""
+        """Determines if the session uses on-demand delivery (gNMI POLL subscription)."""
         if isinstance(self.operation, SubscribeOperation):
-            d_mode = getattr(self.operation.delivery, 'mode', None)
-            val = d_mode.value if hasattr(d_mode, 'value') else str(d_mode)
-            return val.lower() == 'poll'
+            return getattr(self.operation.delivery, 'mode', None) is DeliveryMode.ON_DEMAND
         return str(self.kwargs.get('mode', '')).lower() == 'poll'
 
     def _handle_stream_event(self, event: StreamEvent) -> None:
