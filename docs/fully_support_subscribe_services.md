@@ -111,7 +111,7 @@ ProtocolOptionsType = Union[GnmiOptions, NetconfOptions, BaseProtocolOptions]
 
 @dataclass
 class RootConfig:
-    delivery: DeliveryConfig
+    delivery: DeliveryPolicy
     operation: OperationConfig
     selectors: List[SelectorConfig] = field(default_factory=list)
     protocol_options: Optional[ProtocolOptionsType] = None

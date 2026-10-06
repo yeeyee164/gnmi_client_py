@@ -123,7 +123,7 @@ def build_sample_sessions():
         operation=SubscribeOperation(
             subscription_name='sub_poll',
             selector=PathSelector(paths=["/interfaces"]),
-            delivery=DeliveryPolicy(mode=DeliveryMode.POLL)
+            delivery=DeliveryPolicy(mode=DeliveryMode.ON_DEMAND)
         )
     )
 
@@ -343,7 +343,7 @@ class TestSemanticManagerSessionScoping(unittest.TestCase):
             connection=conn6, protocol=Protocol.GNMI,
             operation=SubscribeOperation(
                 selector=PathSelector(paths=['/components/...']),
-                delivery=DeliveryPolicy(mode=DeliveryMode.POLL),
+                delivery=DeliveryPolicy(mode=DeliveryMode.ON_DEMAND),
                 subscription_name='sub_poll'
             )
         )

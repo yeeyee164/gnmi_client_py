@@ -32,7 +32,6 @@ from config import (
     GnmiOptions,
     BaseProtocolOptions,
     NetconfOptions,
-    DeliveryConfig,
     SelectorConfig,
 )
 from modules.security import SecurityProfile
@@ -95,8 +94,8 @@ class TestConfigModels(unittest.TestCase):
             ps1.prefix = "change"
 
     def test_delivery_policy(self):
-        dp = DeliveryPolicy(mode=DeliveryMode.ON_CHANGE, interval=10, heartbeat=30, suppress_redundant=True)
-        self.assertEqual(dp.mode, DeliveryMode.ON_CHANGE)
+        dp = DeliveryPolicy(mode=DeliveryMode.EVENT_DRIVEN, interval=10, heartbeat=30, suppress_redundant=True)
+        self.assertEqual(dp.mode, DeliveryMode.EVENT_DRIVEN)
         self.assertEqual(dp.interval, 10)
         self.assertEqual(dp.heartbeat, 30)
         self.assertTrue(dp.suppress_redundant)
@@ -200,7 +199,7 @@ class TestConfigModels(unittest.TestCase):
         # SubscribeOperation validation with polymorphic protocol_options
         sub_op = SubscribeOperation(
             selector=PathSelector(paths=["/interfaces"]),
-            delivery=DeliveryConfig(mode=DeliveryMode.PERIODIC, interval=10),
+            delivery=DeliveryPolicy(mode=DeliveryMode.PERIODIC, interval=10),
             protocol_options=gnmi_opts,
         )
         sub_op.validate()
@@ -407,7 +406,7 @@ class TestWorkersAndManagersSemanticIntegration(unittest.TestCase):
             protocol=Protocol.GNMI,
             operation=SubscribeOperation(
                 selector=PathSelector(paths=["/interfaces"]),
-                delivery=DeliveryPolicy(mode=DeliveryMode.POLL)
+                delivery=DeliveryPolicy(mode=DeliveryMode.ON_DEMAND)
             )
         )
         s1 = SubscribeSession(config=sub_sess_periodic)

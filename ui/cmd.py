@@ -56,6 +56,63 @@ class FileConfigError(Exception):
     pass
 
 # =====================================================================
+# Interface vocabulary -> protocol-neutral DeliveryMode translation
+# =====================================================================
+
+# Subscription-level modes (CLI `--mode`, YAML `subscriptions.<name>.mode`)
+_RPC_MODE_TO_DELIVERY: Dict[str, DeliveryMode] = {
+    "once": DeliveryMode.SNAPSHOT,
+    "poll": DeliveryMode.ON_DEMAND,
+}
+# Per-path stream modes used only when the subscription-level mode is "stream"
+# (CLI `--sub-mode`, YAML `subscriptions.<name>.subscription.mode`)
+_STREAM_SUB_MODE_TO_DELIVERY: Dict[str, DeliveryMode] = {
+    "sample": DeliveryMode.PERIODIC,
+    "on_change": DeliveryMode.EVENT_DRIVEN,
+    "target_defined": DeliveryMode.SERVER_DETERMINED,
+}
+
+
+def _normalize_mode_token(value: Any) -> str:
+    return str(value).strip().lower().replace("-", "_") if value is not None else ""
+
+
+def resolve_delivery_mode(rpc_mode: Optional[str],
+                          sub_mode: Optional[str] = None,
+                          default_sub_mode: str = "sample") -> DeliveryMode:
+    """Translate CLI/YAML subscription modes into a protocol-neutral `DeliveryMode`.
+
+    Args:
+        rpc_mode: subscription-level mode ("once" | "poll" | "stream"). Empty means "stream".
+            A neutral `DeliveryMode` value (e.g. "on_demand") is also accepted.
+        sub_mode: stream mode ("sample" | "on_change" | "target_defined"); only used
+            when `rpc_mode` is "stream". A neutral `DeliveryMode` value is also accepted.
+        default_sub_mode: stream mode applied when `sub_mode` is empty.
+
+    Raises:
+        ValueError: if either mode cannot be translated.
+    """
+    rpc = _normalize_mode_token(rpc_mode) or "stream"
+    if rpc in _RPC_MODE_TO_DELIVERY:
+        return _RPC_MODE_TO_DELIVERY[rpc]
+
+    if rpc == "stream":
+        sub = _normalize_mode_token(sub_mode) or _normalize_mode_token(default_sub_mode)
+        if sub in _STREAM_SUB_MODE_TO_DELIVERY:
+            return _STREAM_SUB_MODE_TO_DELIVERY[sub]
+        token, valid = sub, sorted(_STREAM_SUB_MODE_TO_DELIVERY)
+    else:
+        token, valid = rpc, sorted(list(_RPC_MODE_TO_DELIVERY) + ["stream"])
+
+    try:
+        return DeliveryMode(token)  # neutral vocabulary passthrough
+    except ValueError:
+        raise ValueError(
+            f"Unsupported subscription mode '{token}'. "
+            f"Must be one of {valid} or a delivery mode {[m.value for m in DeliveryMode]}."
+        ) from None
+
+# =====================================================================
 # Root config data class per incoming config
 # =====================================================================
 
@@ -314,16 +371,7 @@ class CLIConfigBuilder(ConfigBuilder):
                 elif operation in ('subscribe', 'stream', 'once', 'poll'):
                     mode_str = getattr(self.args, "mode", "stream").lower()
                     sub_mode_str = str(getattr(self.args, "sub_mode", getattr(self.args, "stream_mode", "sample"))).lower()
-                    if mode_str == 'once':
-                        del_mode = DeliveryMode.SNAPSHOT
-                    elif mode_str == 'poll':
-                        del_mode = DeliveryMode.POLL
-                    elif sub_mode_str == 'on_change':
-                        del_mode = DeliveryMode.ON_CHANGE
-                    elif sub_mode_str == 'target_defined':
-                        del_mode = DeliveryMode.TARGET_DEFINED
-                    else:
-                        del_mode = DeliveryMode.PERIODIC
+                    del_mode = resolve_delivery_mode(mode_str, sub_mode_str)
 
                     sample_interval = getattr(self.args, "sample_interval", getattr(self.args, "interval", 0))
                     del_policy = DeliveryPolicy(
@@ -338,7 +386,7 @@ class CLIConfigBuilder(ConfigBuilder):
                         selector=PathSelector(paths=tuple(paths), prefix=prefix),
                         delivery=del_policy,
                         subscription_name="cli_execution",
-                        protocol_options=GNMIOptions(encoding=encoding, updates_only=updates_only, sub_mode=sub_mode_str)
+                        protocol_options=GNMIOptions(encoding=encoding, updates_only=updates_only)
                     )
                 else:
                     raise ValueError(f"Unknown gNMI operation: {operation}")
@@ -580,13 +628,11 @@ class FileConfigBuilder(ConfigBuilder):
                     sub_mode = sub_details.get('mode', 'target_defined')
                     sample_interval = sub_details.get('sample_interval', 0)
 
-                    d_mode = DeliveryMode.SNAPSHOT if named_sub.get('mode') == 'once' else (
-                        DeliveryMode.POLL if named_sub.get('mode') == 'poll' else (
-                            DeliveryMode.ON_CHANGE if sub_mode == 'on_change' else (
-                                DeliveryMode.TARGET_DEFINED if sub_mode == 'target_defined' else DeliveryMode.PERIODIC
-                            )
-                        )
-                    )
+                    try:
+                        d_mode = resolve_delivery_mode(named_sub.get('mode'), sub_mode,
+                                                       default_sub_mode='target_defined')
+                    except ValueError as e:
+                        raise FileConfigError(f"subscription {sub_name}: {e}") from None
                     del_policy = DeliveryPolicy(
                         mode=d_mode,
                         interval=sample_interval,
@@ -600,7 +646,6 @@ class FileConfigBuilder(ConfigBuilder):
                         protocol_options=GNMIOptions(
                             encoding=named_sub.get('encoding', 'json_ietf'),
                             updates_only=update_only,
-                            sub_mode=sub_mode,
                         )
                     )
                     session = SessionConfig(

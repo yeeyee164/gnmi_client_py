@@ -16,7 +16,6 @@ from config.selectors import (
 from config.delivery import (
     DeliveryMode,
     DeliveryPolicy,
-    DeliveryConfig,
 )
 from config.operations import (
     OperationConfig,
@@ -48,7 +47,6 @@ __all__ = [
     "FilterSelector",
     "DeliveryMode",
     "DeliveryPolicy",
-    "DeliveryConfig",
     "OperationConfig",
     "CapabilitiesOperation",
     "GetSchemaOperation",

@@ -7,7 +7,7 @@ from config.protocol_options.base import BaseProtocolOptions
 from config.protocol_options.gnmi import GnmiOptions
 from config.protocol_options.netconf import NetconfOptions
 from config.selectors import Selector, SelectorConfig
-from config.delivery import DeliveryPolicy, DeliveryConfig
+from config.delivery import DeliveryPolicy
 
 class Protocol(str, Enum):
     NONE = "none"
