@@ -46,6 +46,31 @@ class ChangeType(str, Enum):
     REMOVE = "remove"
 
 @dataclass(frozen=True, kw_only=True)
+class GetConfigOperation(GetOperation):
+    r"""
+    Retrieval of configuration datastores
+
+    Probably Affected protocols:
+        - gNMI Get(type: config)
+        - NETCONF \<get-config\>
+    """
+    read_scope: str = "config"
+
+    def __init__(
+        self,
+        selector: Optional[Selector] = None,
+        read_scope: str = "config",
+        protocol_options: Optional[BaseProtocolOptions] = None,
+        **kwargs,
+    ):
+        sel = kwargs.get('selector', selector)
+        if sel is None:
+            sel = PathSelector(paths=())
+        object.__setattr__(self, 'selector', sel)
+        object.__setattr__(self, 'read_scope', read_scope)
+        object.__setattr__(self, 'protocol_options', kwargs.get('protocol_options', protocol_options))
+
+@dataclass(frozen=True, kw_only=True)
 class Change:
     """Atomic mutation intent."""
     path: str
@@ -78,6 +103,17 @@ class SetOperation(OperationConfig):
     def validate(self) -> None:
         if self.protocol_options is not None and hasattr(self.protocol_options, 'validate'):
             self.protocol_options.validate()
+
+@dataclass(frozen=True, kw_only=True)
+class EditConfigOperation(SetOperation):
+    r"""
+    Mutation of configuration datastores
+
+    Probably Affected protocols:
+        - gNMI Set(maybe)
+        - NETCONF \<edit-config\>
+    """
+    pass
 
 @dataclass(frozen=True, kw_only=True)
 class SubscribeOperation(OperationConfig):

@@ -22,9 +22,11 @@ from config.operations import (
     CapabilitiesOperation,
     GetSchemaOperation,
     GetOperation,
+    GetConfigOperation,
     ChangeType,
     Change,
     SetOperation,
+    EditConfigOperation,
     SubscribeOperation,
 )
 from config.protocol_options import (
@@ -51,9 +53,11 @@ __all__ = [
     "CapabilitiesOperation",
     "GetSchemaOperation",
     "GetOperation",
+    "GetConfigOperation",
     "ChangeType",
     "Change",
     "SetOperation",
+    "EditConfigOperation",
     "SubscribeOperation",
     "BaseProtocolOptions",
     "GnmiOptions",

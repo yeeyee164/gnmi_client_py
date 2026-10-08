@@ -4,9 +4,12 @@ targets:
   172.20.20.2:830:
     username: "admin"
     password: "NokiaSrl1!"
-    operation: "edit-config"
-    target_datastore: "candidate"
-    config: "tests/netconf_edit_desc.xml"
+    operations:
+      - edit-config:
+          target: "candidate"
+          config: "tests/netconf_edit_desc.xml"
+          default_operation: "merge"
+          error_option: "stop-on-error"
 
 outputs:
   default_output:

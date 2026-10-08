@@ -41,9 +41,11 @@ from config.operations import (
     CapabilitiesOperation,
     GetSchemaOperation,
     GetOperation,
+    GetConfigOperation,
     ChangeType,
     Change,
     SetOperation,
+    EditConfigOperation,
     SubscribeOperation,
 )
 from config.protocol_options import (
@@ -492,6 +494,129 @@ class CLIConfigBuilder(ConfigBuilder):
             log_file=self.args.log_file,
         )
 
+def parse_operation_item(op_item: Any, protocol: Protocol = Protocol.NETCONF) -> OperationConfig:
+    """
+    Parses a single operation entry from YAML into a typed OperationConfig.
+    Supports:
+    - Mapping syntax: {"get-schema": {"identifier": "openconfig-interfaces", ...}}
+    - Object syntax: {"operation": "get-schema", "identifier": "openconfig-interfaces", ...}
+    - Direct OperationConfig instances.
+    """
+    if isinstance(op_item, OperationConfig):
+        return op_item
+
+    if not isinstance(op_item, dict):
+        raise FileConfigError(f"Operation entry must be a dictionary, got {type(op_item).__name__}: {op_item}")
+
+    if "operation" in op_item or "type" in op_item:
+        op_name = str(op_item.get("operation") or op_item.get("type"))
+        op_params = {k: v for k, v in op_item.items() if k not in ("operation", "type")}
+    elif len(op_item) == 1:
+        op_name = list(op_item.keys())[0]
+        params_val = op_item[op_name]
+        op_params = params_val if isinstance(params_val, dict) else {}
+    else:
+        raise FileConfigError(
+            f"Invalid operation structure: {op_item}. "
+            "Must be either a single-key mapping (e.g. {'get-schema': {...}}) "
+            "or specify 'operation': '<type>'."
+        )
+
+    op_norm = op_name.strip().lower().replace("_", "-")
+
+    if op_norm in ("capability", "capabilities"):
+        return CapabilitiesOperation()
+
+    elif op_norm == "get-schema":
+        ident = op_params.get("identifier")
+        if not ident:
+            raise FileConfigError("Missing mandatory parameter 'identifier' for get-schema operation")
+        version = op_params.get("version")
+        format_val = op_params.get("format", "yang") or "yang"
+        return GetSchemaOperation(
+            identifier=str(ident),
+            version=str(version) if version is not None else None,
+            format=str(format_val)
+        )
+
+    elif op_norm == "get-config":
+        source = op_params.get("source", "running")
+        raw_filter = op_params.get("filter", "")
+        filter_type = op_params.get("filter_type")
+        paths = op_params.get("paths", op_params.get("path", []))
+        if isinstance(paths, str):
+            paths = [paths]
+
+        if raw_filter:
+            filter_str = read_payload(raw_filter) if isinstance(raw_filter, str) else str(raw_filter)
+            f_type = filter_type or ("subtree" if filter_str.strip().startswith("<") else "xpath")
+            selector = FilterSelector(expression=filter_str, filter_type=f_type)
+        elif paths:
+            selector = PathSelector(paths=tuple(paths), prefix=op_params.get("prefix", ""))
+        else:
+            selector = PathSelector(paths=())
+
+        nc_opts = NetconfOptions(source=source)
+        return GetConfigOperation(
+            selector=selector,
+            read_scope="config",
+            protocol_options=nc_opts
+        )
+
+    elif op_norm == "get":
+        source = op_params.get("source", "running")
+        raw_filter = op_params.get("filter", "")
+        filter_type = op_params.get("filter_type")
+        paths = op_params.get("paths", op_params.get("path", []))
+        if isinstance(paths, str):
+            paths = [paths]
+
+        if raw_filter:
+            filter_str = read_payload(raw_filter) if isinstance(raw_filter, str) else str(raw_filter)
+            f_type = filter_type or ("subtree" if filter_str.strip().startswith("<") else "xpath")
+            selector = FilterSelector(expression=filter_str, filter_type=f_type)
+        elif paths:
+            selector = PathSelector(paths=tuple(paths), prefix=op_params.get("prefix", ""))
+        else:
+            selector = PathSelector(paths=())
+
+        if protocol == Protocol.NETCONF:
+            p_opts = NetconfOptions(source=source)
+        else:
+            p_opts = GNMIOptions(encoding=op_params.get("encoding", "json_ietf"))
+
+        return GetOperation(
+            selector=selector,
+            read_scope="all",
+            protocol_options=p_opts
+        )
+
+    elif op_norm in ("edit-config", "set"):
+        target_ds = op_params.get("target_datastore") or op_params.get("target", "candidate")
+        raw_cfg = op_params.get("config") or op_params.get("nc_config")
+        cfg_payload = read_payload(raw_cfg) if isinstance(raw_cfg, str) and raw_cfg else (raw_cfg or "")
+        def_op = op_params.get("default_operation", "merge")
+        err_opt = op_params.get("error_option", "stop-on-error")
+        test_opt = op_params.get("test_option")
+        commit_val = op_params.get("commit", True)
+
+        nc_opts = NetconfOptions(
+            target_datastore=target_ds,
+            config=cfg_payload if cfg_payload else None,
+            default_operation=def_op,
+            error_option=err_opt,
+            test_option=test_opt,
+            commit=commit_val,
+        )
+        return EditConfigOperation(
+            changes=(),
+            protocol_options=nc_opts
+        )
+
+    else:
+        raise FileConfigError(f"Unsupported operation type '{op_name}'. Available: [capability, get, get-config, get-schema, edit-config]")
+
+
 class FileConfigBuilder(ConfigBuilder):
     def __init__(self, path, protocol: str = ""):
         self.protocol = protocol
@@ -529,7 +654,9 @@ class FileConfigBuilder(ConfigBuilder):
         )
         debug = global_cfg.get('debug', False)
         
-        targets = d.get('targets', [])
+        targets = d.get('targets', {})
+        if not isinstance(targets, dict):
+            targets = {}
 
         if global_protocol != self.protocol:
             raise FileConfigError(f"Given protocol is {global_protocol}, "
@@ -537,12 +664,44 @@ class FileConfigBuilder(ConfigBuilder):
 
         # targets in YAML
         for target_ip_port, tgt_info in targets.items():
-            tgt_cnt = 0
             t_username = tgt_info.get('username', global_username)
             t_password = tgt_info.get('password', global_password)
             t_times = tgt_info.get('times', global_times)
             t_protocol = tgt_info.get('protocol', global_protocol) or 'gnmi'
             t_insecure = tgt_info.get('insecure', global_insecure)
+            proto_enum = Protocol.GNMI if t_protocol.lower() == 'gnmi' else Protocol.NETCONF
+
+            conn = ConnectionConfig(
+                target=str(target_ip_port),
+                username=t_username,
+                password=t_password,
+                security=global_security,
+                insecure=t_insecure
+            )
+            exec_cfg = ExecutionConfig(
+                times=t_times,
+                timeout=tgt_info.get('timeout', 30)
+            )
+
+            # Check if sequential `operations` pipeline is specified
+            if 'operations' in tgt_info:
+                ops_raw = tgt_info['operations']
+                if not isinstance(ops_raw, list):
+                    raise FileConfigError(f"'operations' for target {target_ip_port} must be a list")
+                if not ops_raw:
+                    raise FileConfigError(f"'operations' for target {target_ip_port} cannot be empty")
+
+                parsed_ops = [parse_operation_item(op_entry, protocol=proto_enum) for op_entry in ops_raw]
+                session = SessionConfig(
+                    connection=conn,
+                    protocol=proto_enum,
+                    operations=parsed_ops,
+                    execution=exec_cfg
+                )
+                sessions.append(session)
+                continue
+
+            tgt_cnt = 0
 
             # possible Get, Set, Subscribe list
             t_sub_list = tgt_info.get('subscriptions', [])

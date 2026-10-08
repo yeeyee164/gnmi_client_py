@@ -23,10 +23,24 @@ class BaseUnaryWorker:
     Base class for single request-response workers
     """
     def __init__(self, target_ip=None, target_port=None, username="",
-                 password="", protocol='gnmi',
+                 password="", protocol="",
                  security=None, config=None, **kwargs):
         self.config = config
         self.session = config
+        self.target_ip = target_ip
+        self.target_port = target_port
+        self.username = username
+        self.password = password
+        self.protocol = protocol.lower() if protocol else 'gnmi'
+        self.security = security
+        self.insecure = kwargs.get('insecure', False)
+        self.operation = kwargs.get('operation', '')
+        self.operations = tuple(kwargs.get('operations', ()))
+        if not self.operations and self.operation:
+            self.operations = (self.operation,) if isinstance(self.operation, OperationConfig) else ()
+        elif self.operations and not self.operation:
+            self.operation = self.operations[0]
+        self.kwargs = dict(kwargs)
 
         if config is not None:
             if isinstance(config, SessionConfig) or hasattr(config, 'connection'):
@@ -38,55 +52,36 @@ class BaseUnaryWorker:
                 self.protocol = proto_val.value if hasattr(proto_val, 'value') else str(proto_val).lower()
                 self.security = config.security
                 self.insecure = config.insecure
-                self.operation = config.operation
+                self.operation = getattr(config, 'operation', None)
+                self.operations = tuple(config.operations) if hasattr(config, 'operations') and config.operations else ()
+                if not self.operations and self.operation:
+                    self.operations = (self.operation,)
+                elif self.operations and not self.operation:
+                    self.operation = self.operations[0]
                 self.kwargs = dict(kwargs)
-            else:
-                self.target_ip = config.target_ip
-                self.target_port = config.target_port
-                self.username = config.username
-                self.password = config.password
-                self.protocol = config.protocol.lower() if config.protocol else 'gnmi'
-                self.security = config.security
-                self.insecure = getattr(config, 'insecure', False)
-                self.operation = getattr(config, 'operation', '')
-                self.kwargs = dataclasses.asdict(config)
-                for k in ['target', 'security', 'username', 'password', 'protocol']:
-                    self.kwargs.pop(k, None)
-                self.kwargs.update(kwargs)
-        else:
-            self.target_ip = target_ip
-            self.target_port = target_port
-            self.username = username
-            self.password = password
-            self.protocol = protocol.lower() if protocol else 'gnmi'
-            self.security = security
-            self.insecure = kwargs.get('insecure', False)
-            self.operation = kwargs.get('operation', '')
-            self.kwargs = kwargs
+
 
         self.target = f'{self.target_ip}:{self.target_port}'
 
         raw_id_str = f"{self.target_ip}:{self.target_port}:{time.time()}"
         self.session_id = hashlib.md5(str_to_bytes(raw_id_str)).hexdigest()[:10]
 
-    def _format_result(self, default_rpc_name, data):
-        """Standardizes the output dictionary for the handlers"""
-        if isinstance(self.operation, OperationConfig):
-            if isinstance(self.operation, CapabilitiesOperation):
-                rpc_name = "capability"
-            elif isinstance(self.operation, GetSchemaOperation):
-                rpc_name = "get-schema"
-            elif isinstance(self.operation, GetOperation):
-                rpc_name = "get-config" if self.operation.read_scope == "config" else "get"
-            elif isinstance(self.operation, SetOperation):
-                rpc_name = "edit-config" if self.protocol == "netconf" else "set"
-            else:
-                rpc_name = default_rpc_name
-        elif isinstance(self.operation, str) and self.operation:
-            rpc_name = self.operation
-        else:
-            rpc_name = self.kwargs.get('operation', default_rpc_name)
+    def _get_rpc_name(self, op: Any) -> str:
+        """Determines the standard RPC name for an operation."""
+        if isinstance(op, CapabilitiesOperation):
+            return "capability"
+        elif isinstance(op, GetSchemaOperation):
+            return "get-schema"
+        elif isinstance(op, GetOperation):
+            return "get-config" if getattr(op, 'read_scope', '') == "config" else "get"
+        elif isinstance(op, SetOperation):
+            return "edit-config" if self.protocol == "netconf" else "set"
+        elif isinstance(op, str) and op:
+            return op
+        return self.kwargs.get('operation', 'operation')
 
+    def _format_single_result(self, rpc_name: str, data: Any, op: Any = None) -> dict:
+        """Standardizes a single operation output dictionary for handlers."""
         return {
             'session_id': self.session_id,
             'target': self.target,
@@ -94,6 +89,11 @@ class BaseUnaryWorker:
             'data': data,
             'protocol': self.protocol,
         }
+
+    def _format_result(self, default_rpc_name, data):
+        """Standardizes the output dictionary for the handlers"""
+        rpc_name = self._get_rpc_name(self.operation) if self.operation else default_rpc_name
+        return self._format_single_result(rpc_name, data, op=self.operation)
 
     def _get_client(self):
         """Asks the factory for a client based on the requested protocol"""
@@ -228,3 +228,35 @@ class SetWorker(BaseUnaryWorker):
 
     def __str__(self):
         return "Set"
+
+class SequentialWorker(BaseUnaryWorker):
+    """
+    Executes an ordered sequence of operations within a single client connection lifecycle.
+    """
+    def start(self):
+        logger.debug(f"[Worker(Sequential) {self.target_ip}] Executing {len(self.operations)} sequential operations...")
+        results = []
+        try:
+            with self._get_client() as client:
+                # operations holds each protocol RPC 'specifically'
+                for op in self.operations:
+                    rpc_name = self._get_rpc_name(op)
+                    try:
+                        res = client.execute(op)
+                    except Exception as e:
+                        logger.error(f"[Worker(Sequential) {self.target_ip}] Error in operation '{rpc_name}': {e}")
+                        res = e
+                    results.append(self._format_single_result(rpc_name, res, op=op))
+        except Exception as e:
+            logger.error(f"[Worker(Sequential) {self.target_ip}] Session connection error: {e}")
+            results.append(self._format_single_result("error", e))
+
+        if len(results) == 1:
+            return results[0]
+        return results
+
+    def __str__(self):
+        return f"Sequential({len(self.operations)} ops)"
+
+# Alias for spec and backward-compatibility
+UnaryWorker = SequentialWorker

@@ -86,11 +86,14 @@ class NetconfClient(BaseClient):
         fmt = operation.format
         if fmt and fmt.lower() == 'yang':
             fmt = None
-        return self.session.get_schema(
-            identifier=operation.identifier,
-            version=operation.version or None,
-            format=fmt
-        )
+        try:
+            return self.session.get_schema(
+                identifier=operation.identifier,
+                version=operation.version or None,
+                format=fmt
+            )
+        except Exception as e:
+            return e
 
     def execute_get(self, operation: GetOperation) -> Any:
         """Executes <get> or <get-config> based on GetOperation."""

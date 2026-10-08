@@ -5,7 +5,11 @@ targets:
     username: "admin"
     password: "NokiaSrl1!"
     operations:
-      - get:
+      - capability: {}
+      - get-schema:
+          identifier: "openconfig-system"
+      - get-config:
+          source: "running"
           filter: "<interfaces xmlns=\"http://openconfig.net/yang/interfaces\"><interface><name>mgmt0</name></interface></interfaces>"
           filter_type: "subtree"
 

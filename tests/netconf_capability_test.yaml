@@ -4,7 +4,8 @@ targets:
   172.20.20.2:830:
     username: "admin"
     password: "NokiaSrl1!"
-    operation: "capability"
+    operations:
+      - capability: {}
 
 outputs:
   default_output:

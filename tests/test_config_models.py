@@ -24,9 +24,11 @@ from config import (
     CapabilitiesOperation,
     GetSchemaOperation,
     GetOperation,
+    GetConfigOperation,
     ChangeType,
     Change,
     SetOperation,
+    EditConfigOperation,
     SubscribeOperation,
     GNMIOptions,
     GnmiOptions,
@@ -413,6 +415,137 @@ class TestWorkersAndManagersSemanticIntegration(unittest.TestCase):
         s2 = SubscribeSession(config=sub_sess_poll)
         self.assertFalse(s1.is_poll_mode())
         self.assertTrue(s2.is_poll_mode())
+
+    def test_session_config_with_operations_pipeline(self):
+        conn = ConnectionConfig(target="172.20.20.2:830")
+        cap_op = CapabilitiesOperation()
+        schema_op = GetSchemaOperation(identifier="openconfig-interfaces")
+        get_cfg_op = GetConfigOperation(
+            selector=FilterSelector(expression="<interfaces/>", filter_type="subtree"),
+            protocol_options=NetconfOptions(source="running")
+        )
+        edit_cfg_op = EditConfigOperation(
+            protocol_options=NetconfOptions(target_datastore="candidate", default_operation="merge")
+        )
+
+        session = SessionConfig(
+            connection=conn,
+            protocol=Protocol.NETCONF,
+            operations=[cap_op, schema_op, get_cfg_op, edit_cfg_op]
+        )
+
+        self.assertEqual(len(session.operations), 4)
+        self.assertIs(session.operation, cap_op)
+        self.assertEqual(session.target, "172.20.20.2:830")
+        self.assertIsInstance(session.operations[2], GetConfigOperation)
+        self.assertIsInstance(session.operations[2], GetOperation)
+        self.assertIsInstance(session.operations[3], EditConfigOperation)
+        self.assertIsInstance(session.operations[3], SetOperation)
+
+    def test_base_client_execute_dispatch(self):
+        from specs.base_client import BaseClient
+        class MockClient(BaseClient):
+            def __exit__(self, *args): pass
+            def execute_capabilities(self, op): return "CAP_OK"
+            def execute_schema(self, op): return "SCHEMA_OK"
+            def execute_get(self, op): return "GET_OK"
+            def execute_set(self, op): return "SET_OK"
+            def execute_subscribe(self, **kwargs): return "SUB_OK"
+
+        client = MockClient()
+        self.assertEqual(client.execute(CapabilitiesOperation()), "CAP_OK")
+        self.assertEqual(client.execute(GetSchemaOperation(identifier="m")), "SCHEMA_OK")
+        self.assertEqual(client.execute(GetConfigOperation()), "GET_OK")
+        self.assertEqual(client.execute(GetOperation(selector=PathSelector(paths=()))), "GET_OK")
+        self.assertEqual(client.execute(EditConfigOperation()), "SET_OK")
+        self.assertEqual(client.execute(SetOperation()), "SET_OK")
+        self.assertEqual(client.execute(SubscribeOperation(selector=PathSelector(paths=()), delivery=DeliveryPolicy())), "SUB_OK")
+
+    def test_parse_operation_mapping_syntax(self):
+        from ui.cmd import parse_operation_item
+        op1 = parse_operation_item({"capability": {}})
+        self.assertIsInstance(op1, CapabilitiesOperation)
+
+        op2 = parse_operation_item({"get-schema": {"identifier": "openconfig-interfaces", "version": "2024-04-04"}})
+        self.assertIsInstance(op2, GetSchemaOperation)
+        self.assertEqual(op2.identifier, "openconfig-interfaces")
+        self.assertEqual(op2.version, "2024-04-04")
+
+        op3 = parse_operation_item({"get-config": {"source": "running", "filter": "<interfaces/>", "filter_type": "subtree"}})
+        self.assertIsInstance(op3, GetConfigOperation)
+        self.assertEqual(op3.read_scope, "config")
+        self.assertEqual(op3.selector.expression, "<interfaces/>")
+        self.assertEqual(op3.protocol_options.source, "running")
+
+        op4 = parse_operation_item({"get": {"filter": "/interfaces", "filter_type": "xpath"}})
+        self.assertIsInstance(op4, GetOperation)
+        self.assertEqual(op4.read_scope, "all")
+        self.assertEqual(op4.selector.expression, "/interfaces")
+
+        op5 = parse_operation_item({"edit-config": {"target": "candidate", "config": "<data/>", "default_operation": "replace"}})
+        self.assertIsInstance(op5, EditConfigOperation)
+        self.assertEqual(op5.protocol_options.target_datastore, "candidate")
+        self.assertEqual(op5.protocol_options.config, "<data/>")
+        self.assertEqual(op5.protocol_options.default_operation, "replace")
+
+    def test_parse_operation_object_syntax(self):
+        from ui.cmd import parse_operation_item
+        op1 = parse_operation_item({"operation": "get-schema", "identifier": "ietf-interfaces"})
+        self.assertIsInstance(op1, GetSchemaOperation)
+        self.assertEqual(op1.identifier, "ietf-interfaces")
+
+        op2 = parse_operation_item({"operation": "get-config", "source": "candidate"})
+        self.assertIsInstance(op2, GetConfigOperation)
+        self.assertEqual(op2.protocol_options.source, "candidate")
+
+    def test_parse_operation_validation_errors(self):
+        from ui.cmd import parse_operation_item, FileConfigError
+        # Missing mandatory identifier
+        with self.assertRaises(FileConfigError):
+            parse_operation_item({"get-schema": {}})
+
+        # Unknown operation type
+        with self.assertRaises(FileConfigError):
+            parse_operation_item({"unsupported-rpc": {}})
+
+        # Non-dictionary input
+        with self.assertRaises(FileConfigError):
+            parse_operation_item("get-config")
+
+    def test_file_config_builder_operations_list_parsing(self):
+        import tempfile
+        from ui.cmd import FileConfigBuilder
+
+        yaml_content = """
+protocol: "netconf"
+targets:
+  172.20.20.2:830:
+    username: "admin"
+    password: "pwd"
+    operations:
+      - capability: {}
+      - get-schema:
+          identifier: "openconfig-interfaces"
+      - get-config:
+          source: "running"
+          filter: "<interfaces/>"
+"""
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+            f.write(yaml_content)
+            temp_path = f.name
+
+        try:
+            parsed = FileConfigBuilder(temp_path, protocol="netconf").build()
+            self.assertEqual(len(parsed.sessions), 1)
+            sess = parsed.sessions[0]
+            self.assertEqual(sess.target, "172.20.20.2:830")
+            self.assertEqual(len(sess.operations), 3)
+            self.assertIsInstance(sess.operations[0], CapabilitiesOperation)
+            self.assertIsInstance(sess.operations[1], GetSchemaOperation)
+            self.assertIsInstance(sess.operations[2], GetConfigOperation)
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
 
 
 if __name__ == "__main__":

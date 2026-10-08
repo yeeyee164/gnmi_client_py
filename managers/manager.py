@@ -7,7 +7,14 @@ import dataclasses
 from typing import List, Optional, Tuple, Type, Any
 
 from managers.subscribe_session import SubscribeSession
-from managers.unary_worker import BaseUnaryWorker, GetWorker, SetWorker, CapabilityWorker
+from managers.unary_worker import (
+    BaseUnaryWorker,
+    GetWorker,
+    SetWorker,
+    CapabilityWorker,
+    SequentialWorker,
+    UnaryWorker,
+)
 from modules.output import OutputHandler
 from config.model import SessionConfig, Protocol
 from config.operations import (
@@ -200,7 +207,11 @@ class UnaryManager(BaseRPCManager):
         if self.worker_class is not None:
             return self.worker_class(config=sc)
 
-        op = getattr(sc, 'operation', None)
+        operations = getattr(sc, 'operations', ())
+        if len(operations) > 1:
+            return SequentialWorker(config=sc)
+
+        op = operations[0] if len(operations) == 1 else getattr(sc, 'operation', None)
         if isinstance(op, (GetOperation, GetSchemaOperation)):
             return GetWorker(config=sc)
         elif isinstance(op, SetOperation):
@@ -232,8 +243,10 @@ class UnaryManager(BaseRPCManager):
                 try:
                     result = future.result()
                     if result:
-                        for handler in self.output_handlers:
-                            handler.write(result)
+                        items = result if isinstance(result, list) else [result]
+                        for item in items:
+                            for handler in self.output_handlers:
+                                handler.write(item)
                 except Exception as exc:
                     worker_name = session.__class__.__name__
                     logger.error(f"[{worker_name} {session.target_ip}] generated an exception: {exc}")
@@ -247,9 +260,16 @@ class ManagerFactory:
     """
 
     @staticmethod
+    def _is_unary_op(op: Any) -> bool:
+        return isinstance(op, (CapabilitiesOperation, GetOperation, SetOperation, GetSchemaOperation))
+
+    @staticmethod
     def _is_unary(session: Any) -> bool:
         op = getattr(session, 'operation', None)
-        if isinstance(op, (CapabilitiesOperation, GetOperation, SetOperation, GetSchemaOperation)):
+        if ManagerFactory._is_unary_op(op):
+            return True
+        operations = getattr(session, 'operations', ())
+        if operations and all(ManagerFactory._is_unary_op(o) for o in operations):
             return True
         return False
 

@@ -42,6 +42,11 @@ class OutputHandler:
 
     def write(self, message):
         """Formats and writes the message to the defined stream"""
+        if isinstance(message, list):
+            for item in message:
+                self.write(item)
+            return
+
         raw_data = message.get('data')
         protocol = message.get('protocol')
         sub_name = message.get('subscription_name', '')
@@ -71,8 +76,11 @@ class OutputHandler:
                 output_str = formatted_data
         elif self.format == 'text':
             formatted_data = self.formatter.format_text(raw_data)
-            # just present it without any strings
-            output_str = f"\n{formatted_data}"
+            rpc = message.get('rpc')
+            if rpc:
+                output_str = f"\n--- [Operation: {rpc}] ---\n{formatted_data}"
+            else:
+                output_str = f"\n{formatted_data}"
         else:
             output_str = str(message)
 

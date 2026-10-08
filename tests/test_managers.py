@@ -53,7 +53,9 @@ from config import (
     DeliveryPolicy,
     CapabilitiesOperation,
     GetOperation,
+    GetConfigOperation,
     SetOperation,
+    EditConfigOperation,
     SubscribeOperation,
     Change,
     ChangeType,
@@ -61,7 +63,7 @@ from config import (
     NetconfOptions,
 )
 from managers.manager import BaseRPCManager, UnaryManager, SubscriptionManager, ManagerFactory
-from managers.unary_worker import BaseUnaryWorker, GetWorker, SetWorker, CapabilityWorker
+from managers.unary_worker import BaseUnaryWorker, GetWorker, SetWorker, CapabilityWorker, SequentialWorker, UnaryWorker
 from managers.subscribe_session import SubscribeSession
 from specs.stream_types import StreamEvent, StreamCommandType, StreamContext
 
@@ -436,6 +438,67 @@ class TestSemanticManagerSessionScoping(unittest.TestCase):
         # Stop session
         session.stop()
         self.assertTrue(session.stream_context.is_cancelled)
+
+    def test_unary_manager_sequential_worker_resolution(self):
+        conn = ConnectionConfig(target='172.20.20.2:830')
+        multi_op_session = SessionConfig(
+            connection=conn,
+            protocol=Protocol.NETCONF,
+            operations=[
+                CapabilitiesOperation(),
+                GetConfigOperation(protocol_options=NetconfOptions(source="running")),
+            ]
+        )
+        mgr = UnaryManager(sessions=[multi_op_session], output_handlers=[MagicMock()])
+        mgr.build_sessions()
+        self.assertEqual(len(mgr.sessions), 1)
+        self.assertIsInstance(mgr.sessions[0], SequentialWorker)
+
+    def test_sequential_worker_single_session_lifecycle(self):
+        conn = ConnectionConfig(target='172.20.20.2:830')
+        cap_op = CapabilitiesOperation()
+        get_op = GetConfigOperation(protocol_options=NetconfOptions(source="running"))
+        multi_op_session = SessionConfig(
+            connection=conn,
+            protocol=Protocol.NETCONF,
+            operations=[cap_op, get_op]
+        )
+        worker = SequentialWorker(config=multi_op_session)
+
+        mock_client = MagicMock()
+        mock_client.execute.side_effect = ["CAP_RES", "GET_RES"]
+
+        with patch.object(worker, '_get_client') as mock_get_client:
+            mock_get_client.return_value.__enter__.return_value = mock_client
+            results = worker.start()
+
+        mock_get_client.return_value.__enter__.assert_called_once()
+        self.assertEqual(mock_client.execute.call_count, 2)
+        mock_client.execute.assert_any_call(cap_op)
+        mock_client.execute.assert_any_call(get_op)
+        self.assertEqual(len(results), 2)
+        self.assertEqual(results[0]['rpc'], 'capability')
+        self.assertEqual(results[0]['data'], 'CAP_RES')
+        self.assertEqual(results[1]['rpc'], 'get-config')
+        self.assertEqual(results[1]['data'], 'GET_RES')
+
+    def test_output_handler_list_and_text_formatting(self):
+        import io
+        from modules.output import OutputHandler
+        out_cfg = OutputConfig(output_type=OutputType.STDOUT, format=OutputFormat.TEXT)
+        handler = OutputHandler(out_cfg)
+        buf = io.StringIO()
+        handler.stream = buf
+
+        messages = [
+            {'target': '172.20.20.2:830', 'rpc': 'capability', 'data': ['cap1', 'cap2'], 'protocol': 'netconf'},
+            {'target': '172.20.20.2:830', 'rpc': 'get-schema', 'data': 'module test {}', 'protocol': 'netconf'}
+        ]
+        handler.write(messages)
+        output = buf.getvalue()
+        self.assertIn("--- [Operation: capability] ---", output)
+        self.assertIn("--- [Operation: get-schema] ---", output)
+        self.assertIn("module test {}", output)
 
 
 if __name__ == '__main__':
