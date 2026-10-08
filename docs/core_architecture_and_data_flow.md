@@ -38,7 +38,7 @@ Data flow
             │
             ▼
    [ ManagerFactory ]
-        ├── UnaryManager            ───> Spawns Worker Threads [ GetWorker / SetWorker / CapabilitiesWorker ]
+        ├── UnaryManager            ───> Spawns Worker Threads [ GetWorker / SetWorker / CapabilitiesWorker / SequentialWorker ]
         └── SubscriptionManager     ───> Spawns Worker Threads [ SubscribeSession ]
                                                 │
                                                 ▼
@@ -59,6 +59,11 @@ Workers
 -------
 
 Workers (BaseUnaryWorker, SubscribeSession) are protocol-agnostic. They use defined classes in `config` directory.
+
+### SequentialWorker
+
+A worker may hold one or more RPCs which represented by `SessionConfig`. To serve such operation, `SequentialWorker` handles operations via one-shot instruction(YAML).
+* NOTE: It only cares Unary RPCs.
 
 Modules
 -------
@@ -110,6 +115,12 @@ Clients
 Fully functional across `capability`, `get`, `set`, and `subscribe` (stream, once, poll).
 - Extensions are not yet supported.
 
+**plans to be supported extensions**
+
+1. CLI execution(SetRequest)
+2. commit(SetRequest)
+
+
 #### NETCONF Client
 
 Phase 1:
@@ -119,7 +130,7 @@ Phase 1:
 * Added `RPCError` handling to capture router `<rpc-error>` replies and parse the resulting `lxml` nodes cleanly into JSON dictionaries using `NETCONFFormatter` in `modules/formatter.py`.
 * `ManagerFactory` routes `get`, `get-config`, and `get-schema` to `GetWorker`.
 
-Phase 2 In-Progress:
+Phase 2:
 * Refactor protocol configuration.
 * Supports NETCONF `<edit-config>` RPC.
 * Supports NETCONF `<edit-config>` RPC with operations.

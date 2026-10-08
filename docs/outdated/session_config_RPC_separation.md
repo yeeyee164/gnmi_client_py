@@ -1,4 +1,6 @@
-# **Antigravity AI Task: Per-RPC Session Configuration Hierarchy Refactor**
+# **Per-RPC Session Configuration Hierarchy Refactor**
+
+> NOTE: It's obsoleted document.
 
 ## **1\. System Identity & Mission Brief**
 

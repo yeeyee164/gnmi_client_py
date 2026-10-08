@@ -1,4 +1,4 @@
-# **Antigravity Task Brief: NETCONF Phase 2 \- \<edit-config\>**
+# **NETCONF Phase 2 \- \<edit-config\>**
 
 ## **1\. Project Context & Recent Architectural Fixes**
 
