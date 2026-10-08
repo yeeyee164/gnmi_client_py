@@ -140,10 +140,11 @@ class GNMIClient(BaseClient):
         deletes = []
 
         for change in operation.changes:
+            change_type = getattr(change, 'type', None)
             if change.operation == ChangeType.MERGE:
-                updates.append((change.path, change.value))
+                updates.append((change.path, change.value, change_type))
             elif change.operation == ChangeType.REPLACE:
-                replaces.append((change.path, change.value))
+                replaces.append((change.path, change.value, change_type))
             elif change.operation == ChangeType.DELETE:
                 deletes.append(change.path)
 
@@ -411,7 +412,7 @@ class GNMIClient(BaseClient):
         response = self.stub.Get(request, metadata=self.metadata)
         return response
 
-    def _build_typed_val(self, val: Any, encoding: str = "json_ietf") -> gnmi_pb2.TypedValue:
+    def _build_typed_val(self, val: Any, encoding: str = "json_ietf", val_type: Any = None) -> gnmi_pb2.TypedValue:
         """Translates Python inputs into gnmi_pb2.TypedValue adhering to gNMI Section 3.4."""
         if gnmi_pb2 is None:
             raise RuntimeError("gnmi_pb2 is not loaded")
@@ -420,6 +421,49 @@ class GNMIClient(BaseClient):
             return val
 
         tv = gnmi_pb2.TypedValue()
+
+        # Handle explicit val_type if supplied
+        # NOTE: it will be changed to enumeration during YANG Schema support 
+        if val_type is not None:
+            vt = str(val_type).lower().strip()
+            if vt in ("string", "str"):
+                tv.string_val = str(val)
+                return tv
+            elif vt in ("bool", "boolean"):
+                if isinstance(val, str):
+                    tv.bool_val = (val.lower() == 'true')
+                else:
+                    tv.bool_val = bool(val)
+                return tv
+            elif vt in ("int", "int8", "int16", "int32", "int64"):
+                tv.int_val = int(val)
+                return tv
+            elif vt in ("uint", "uint8", "uint16", "uint32", "uint64"):
+                tv.uint_val = int(val)
+                return tv
+            elif vt in ("float", "double"):
+                tv.float_val = float(val)
+                return tv
+            elif vt in ("decimal", "decimal64"):
+                if hasattr(val, 'digits') and hasattr(val, 'precision'):
+                    tv.decimal_val.CopyFrom(val)
+                    return tv
+                tv.float_val = float(val)
+                return tv
+            elif vt in ("json", "json_raw"):
+                raw_bytes = val.encode('utf-8') if isinstance(val, str) else json.dumps(val).encode('utf-8')
+                tv.json_val = raw_bytes
+                return tv
+            elif vt in ("json_ietf", "json-ietf"):
+                raw_bytes = val.encode('utf-8') if isinstance(val, str) else json.dumps(val).encode('utf-8')
+                tv.json_ietf_val = raw_bytes
+                return tv
+            elif vt in ("bytes",):
+                tv.bytes_val = val if isinstance(val, bytes) else str(val).encode('utf-8')
+                return tv
+            elif vt in ("ascii",):
+                tv.ascii_val = str(val)
+                return tv
 
         # 1. Check if string points to a file reference (@file or valid path)
         if isinstance(val, str):
@@ -523,7 +567,10 @@ class GNMIClient(BaseClient):
 
         # 2. replace
         for item in (replaces or []):
-            if isinstance(item, (tuple, list)) and len(item) == 2:
+            val_type = None
+            if isinstance(item, (tuple, list)) and len(item) == 3:
+                p, v, val_type = item
+            elif isinstance(item, (tuple, list)) and len(item) == 2:
                 p, v = item
             elif isinstance(item, dict):
                 for p, v in item.items():
@@ -531,15 +578,20 @@ class GNMIClient(BaseClient):
                     rep_obj.path.CopyFrom(parse_path(p))
                     rep_obj.val.CopyFrom(self._build_typed_val(v, encoding=enc))
                 continue
+            elif isinstance(item, str) and ':::' in item:
+                p, v = item.split(':::', 1)
             else:
                 p, v = item, ""
             rep_obj = request.replace.add()
             rep_obj.path.CopyFrom(parse_path(p))
-            rep_obj.val.CopyFrom(self._build_typed_val(v, encoding=enc))
+            rep_obj.val.CopyFrom(self._build_typed_val(v, encoding=enc, val_type=val_type))
 
         # 3. update
         for item in (updates or []):
-            if isinstance(item, (tuple, list)) and len(item) == 2:
+            val_type = None
+            if isinstance(item, (tuple, list)) and len(item) == 3:
+                p, v, val_type = item
+            elif isinstance(item, (tuple, list)) and len(item) == 2:
                 p, v = item
             elif isinstance(item, dict):
                 for p, v in item.items():
@@ -547,11 +599,13 @@ class GNMIClient(BaseClient):
                     upd_obj.path.CopyFrom(parse_path(p))
                     upd_obj.val.CopyFrom(self._build_typed_val(v, encoding=enc))
                 continue
+            elif isinstance(item, str) and ':::' in item:
+                p, v = item.split(':::', 1)
             else:
                 p, v = item, ""
             upd_obj = request.update.add()
             upd_obj.path.CopyFrom(parse_path(p))
-            upd_obj.val.CopyFrom(self._build_typed_val(v, encoding=enc))
+            upd_obj.val.CopyFrom(self._build_typed_val(v, encoding=enc, val_type=val_type))
 
         try:
             response = self.stub.Set(request, metadata=self.metadata)

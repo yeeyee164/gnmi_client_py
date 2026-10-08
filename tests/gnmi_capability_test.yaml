@@ -5,10 +5,10 @@ targets:
   172.20.20.2:57401:
     username: "admin"
     password: "NokiaSrl1!"
-    operation: "capability"
+    operations:
+      - capability: {}
 
 outputs:
   default_output:
     output-type: stdout
     format: json
-

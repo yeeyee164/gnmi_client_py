@@ -248,8 +248,13 @@ class GNMIFormatter(ProtocolFormatter):
         
         All formats were depending on `rpc`.
         """
+        if isinstance(raw_data, Exception):
+            err_dict = {"error": str(raw_data)}
+            if meta:
+                err_dict.update(meta)
+            return err_dict
 
-        rpc = rpc.lower()
+        rpc = (rpc or "").lower()
         if rpc == 'subscribe':
             return self._format_subscribe(raw_data, meta)
         elif rpc == 'get':
@@ -263,6 +268,8 @@ class GNMIFormatter(ProtocolFormatter):
         return str(raw_data)
 
     def format_text(self, raw_data):
+        if isinstance(raw_data, Exception):
+            return f"Error: {raw_data}"
         if hasattr(raw_data, 'DESCRIPTOR'):
             return text_format.MessageToString(raw_data)
         return str(raw_data)

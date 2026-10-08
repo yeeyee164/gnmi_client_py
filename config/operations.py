@@ -76,9 +76,14 @@ class Change:
     path: str
     operation: ChangeType = ChangeType.MERGE
     value: Any = None
+    type: Optional[str] = None
 
-    def __eq__(self, path_val:tuple):
-        return (self.path, self.operation, self.value) == path_val
+    def __eq__(self, other):
+        if isinstance(other, tuple):
+            return (self.path, self.operation, self.value) == other[:3]
+        if isinstance(other, Change):
+            return (self.path, self.operation, self.value, self.type) == (other.path, other.operation, other.value, other.type)
+        return False
 
 @dataclass(frozen=True, kw_only=True)
 class SetOperation(OperationConfig):

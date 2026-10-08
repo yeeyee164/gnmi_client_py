@@ -500,6 +500,39 @@ class TestSemanticManagerSessionScoping(unittest.TestCase):
         self.assertIn("--- [Operation: get-schema] ---", output)
         self.assertIn("module test {}", output)
 
+    def test_sequential_worker_gnmi_pipeline(self):
+        cap_op = CapabilitiesOperation()
+        get_op = GetOperation(selector=PathSelector(paths=("/system/state",)), read_scope="all")
+        set_op = SetOperation(changes=(Change(path="/interfaces/interface[name=mgmt0]/config/description", operation=ChangeType.MERGE, value="test"),))
+
+        session = SessionConfig(
+            connection=ConnectionConfig(target='172.20.20.2:57401'),
+            protocol=Protocol.GNMI,
+            operations=(cap_op, get_op, set_op)
+        )
+        worker = SequentialWorker(config=session)
+
+        mock_client = MagicMock()
+        mock_client.execute.side_effect = ["GNMI_CAP_RES", "GNMI_GET_RES", "GNMI_SET_RES"]
+
+        with patch.object(worker, '_get_client') as mock_get_client:
+            mock_get_client.return_value.__enter__.return_value = mock_client
+            results = worker.start()
+
+        mock_get_client.return_value.__enter__.assert_called_once()
+        self.assertEqual(mock_client.execute.call_count, 3)
+        mock_client.execute.assert_any_call(cap_op)
+        mock_client.execute.assert_any_call(get_op)
+        mock_client.execute.assert_any_call(set_op)
+
+        self.assertEqual(len(results), 3)
+        self.assertEqual(results[0]['rpc'], 'capability')
+        self.assertEqual(results[0]['data'], 'GNMI_CAP_RES')
+        self.assertEqual(results[1]['rpc'], 'get')
+        self.assertEqual(results[1]['data'], 'GNMI_GET_RES')
+        self.assertEqual(results[2]['rpc'], 'set')
+        self.assertEqual(results[2]['data'], 'GNMI_SET_RES')
+
 
 if __name__ == '__main__':
     unittest.main()

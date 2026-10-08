@@ -88,6 +88,47 @@ class TestGNMITypedValueAndSetRequest(unittest.TestCase):
             if os.path.exists(tmp_file):
                 os.remove(tmp_file)
 
+    def test_build_typed_val_explicit_types(self):
+        # Explicit uint32
+        tv_uint = self.client._build_typed_val(42, val_type="uint32")
+        self.assertEqual(tv_uint.uint_val, 42)
+
+        # Explicit int64
+        tv_int = self.client._build_typed_val(-999, val_type="int64")
+        self.assertEqual(tv_int.int_val, -999)
+
+        # Explicit string
+        tv_str = self.client._build_typed_val(12345, val_type="string")
+        self.assertEqual(tv_str.string_val, "12345")
+
+        # Explicit bool
+        tv_bool = self.client._build_typed_val("true", val_type="bool")
+        self.assertTrue(tv_bool.bool_val)
+
+        # Explicit json_ietf
+        tv_json = self.client._build_typed_val({"mtu": 1500}, val_type="json_ietf")
+        self.assertTrue(tv_json.HasField("json_ietf_val"))
+        self.assertEqual(json.loads(tv_json.json_ietf_val.decode('utf-8'))["mtu"], 1500)
+
+    def test_execute_set_typed_values(self):
+        op = SetOperation(
+            changes=(
+                Change(path="/interfaces/interface[name=mgmt0]/config/description", operation=ChangeType.MERGE, value="desc", type="string"),
+                Change(path="/interfaces/interface[name=mgmt0]/config/mtu", operation=ChangeType.REPLACE, value=1500, type="uint32"),
+                Change(path="/interfaces/interface[name=mgmt0]/config/enabled", operation=ChangeType.DELETE),
+            )
+        )
+        with patch.object(self.client, 'set', return_value="SET_RESPONSE_MOCK") as mock_set:
+            res = self.client.execute_set(op)
+            self.assertEqual(res, "SET_RESPONSE_MOCK")
+            mock_set.assert_called_once()
+            _, kwargs = mock_set.call_args
+            self.assertEqual(len(kwargs["updates"]), 1)
+            self.assertEqual(kwargs["updates"][0], ("/interfaces/interface[name=mgmt0]/config/description", "desc", "string"))
+            self.assertEqual(len(kwargs["replaces"]), 1)
+            self.assertEqual(kwargs["replaces"][0], ("/interfaces/interface[name=mgmt0]/config/mtu", 1500, "uint32"))
+            self.assertEqual(kwargs["deletes"], ["/interfaces/interface[name=mgmt0]/config/enabled"])
+
 class TestGNMISetValidation(unittest.TestCase):
     def setUp(self):
         self.validator = GNMIValidator()

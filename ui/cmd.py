@@ -171,7 +171,7 @@ class PairedAction(argparse.Action):
 
 
 def _parse_paired_options(args, group_type: str) -> List[Tuple[str, str]]:
-    """
+    r"""
     Parses paired options (--\<group\>-path with --\<group\>-value or --\<group\>-file).
     - \<group\> is either `update` or `replace`
 
@@ -580,6 +580,7 @@ def parse_operation_item(op_item: Any, protocol: Protocol = Protocol.NETCONF) ->
         else:
             selector = PathSelector(paths=())
 
+        read_scope = op_params.get("type", op_params.get("read_scope", "all"))
         if protocol == Protocol.NETCONF:
             p_opts = NetconfOptions(source=source)
         else:
@@ -587,11 +588,88 @@ def parse_operation_item(op_item: Any, protocol: Protocol = Protocol.NETCONF) ->
 
         return GetOperation(
             selector=selector,
-            read_scope="all",
+            read_scope=read_scope,
             protocol_options=p_opts
         )
 
     elif op_norm in ("edit-config", "set"):
+        is_gnmi_set = (
+            protocol == Protocol.GNMI
+            or any(k in op_params for k in ("update", "replace", "delete"))
+        ) and not any(k in op_params for k in ("nc_config", "target_datastore", "target"))
+
+        if is_gnmi_set:
+            prefix = op_params.get("prefix", "")
+            changes_list = []
+
+            def _parse_mutation(item, op_type: ChangeType) -> Change:
+                if isinstance(item, str):
+                    if ":::" in item:
+                        p, v = item.split(":::", 1)
+                        return Change(path=p.strip(), operation=op_type, value=v.strip())
+                    else:
+                        raise FileConfigError(
+                            f"Mutation string item '{item}' must follow 'path:::value' notation"
+                        )
+                elif isinstance(item, dict):
+                    path_val = item.get("path")
+                    val = item.get("val", item.get("value"))
+                    type_val = item.get("type")
+
+                    # If value not provided, check if path contains ":::" delimiter
+                    if val is None and path_val and ":::" in str(path_val):
+                        p, v = str(path_val).split(":::", 1)
+                        return Change(path=p.strip(), operation=op_type, value=v.strip(), type=type_val)
+
+                    if val is None:
+                        raise FileConfigError(
+                            f"Missing value for mutation path '{path_val}'. "
+                            "Provide 'val' / 'value' or use 'path:::value' syntax."
+                        )
+                    if not path_val:
+                        raise FileConfigError(f"Missing path in mutation item: {item}")
+
+                    return Change(path=path_val, operation=op_type, value=val, type=type_val)
+                elif isinstance(item, (list, tuple)) and len(item) == 2:
+                    return Change(path=item[0], operation=op_type, value=item[1])
+                else:
+                    raise FileConfigError(f"Invalid mutation item structure: {item}")
+
+            # 1. delete
+            del_items = op_params.get("delete", [])
+            if isinstance(del_items, str):
+                del_items = [del_items]
+            for d in del_items:
+                if isinstance(d, str):
+                    p = d.split(":::", 1)[0].strip() if ":::" in d else d.strip()
+                    changes_list.append(Change(path=p, operation=ChangeType.DELETE))
+                elif isinstance(d, dict) and "path" in d:
+                    p = str(d["path"]).split(":::", 1)[0].strip() if ":::" in str(d["path"]) else str(d["path"]).strip()
+                    changes_list.append(Change(path=p, operation=ChangeType.DELETE))
+                else:
+                    raise FileConfigError(f"Invalid delete item structure: {d}")
+
+            # 2. update (merge)
+            upd_items = op_params.get("update", [])
+            if isinstance(upd_items, (str, dict)) and not isinstance(upd_items, list):
+                upd_items = [upd_items]
+            for u in upd_items:
+                changes_list.append(_parse_mutation(u, ChangeType.MERGE))
+
+            # 3. replace
+            rep_items = op_params.get("replace", [])
+            if isinstance(rep_items, (str, dict)) and not isinstance(rep_items, list):
+                rep_items = [rep_items]
+            for r in rep_items:
+                changes_list.append(_parse_mutation(r, ChangeType.REPLACE))
+
+            gnmi_opts = GNMIOptions(encoding=op_params.get("encoding", "json_ietf"))
+            return SetOperation(
+                changes=tuple(changes_list),
+                prefix=prefix,
+                protocol_options=gnmi_opts
+            )
+
         target_ds = op_params.get("target_datastore") or op_params.get("target", "candidate")
         raw_cfg = op_params.get("config") or op_params.get("nc_config")
         cfg_payload = read_payload(raw_cfg) if isinstance(raw_cfg, str) and raw_cfg else (raw_cfg or "")
@@ -614,7 +692,9 @@ def parse_operation_item(op_item: Any, protocol: Protocol = Protocol.NETCONF) ->
         )
 
     else:
-        raise FileConfigError(f"Unsupported operation type '{op_name}'. Available: [capability, get, get-config, get-schema, edit-config]")
+        raise FileConfigError(
+            f"Unsupported operation type '{op_name}'. Available: [capability, get, get-config, get-schema, edit-config, set]"
+        )
 
 
 class FileConfigBuilder(ConfigBuilder):
@@ -700,6 +780,15 @@ class FileConfigBuilder(ConfigBuilder):
                 )
                 sessions.append(session)
                 continue
+
+            # Deprecate legacy top-level target fields
+            for dep_key in ('get-path', 'update-list', 'delete-list', 'replace-list'):
+                if dep_key in tgt_info:
+                    sugg = "get: { path: [...] }" if dep_key == "get-path" else "set: { ... }"
+                    raise FileConfigError(
+                        f"Target '{target_ip_port}' uses deprecated field '{dep_key}'. "
+                        f"Please use the 'operations:' sequence (e.g. 'operations: [ - {sugg} ]')."
+                    )
 
             tgt_cnt = 0
 

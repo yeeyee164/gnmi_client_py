@@ -547,6 +547,149 @@ targets:
             if os.path.exists(temp_path):
                 os.remove(temp_path)
 
+    def test_change_dataclass_with_type(self):
+        c1 = Change(path="/interfaces/interface", operation=ChangeType.MERGE, value=100, type="uint32")
+        c2 = Change(path="/interfaces/interface", operation=ChangeType.MERGE, value=100, type="uint32")
+        c3 = Change(path="/interfaces/interface", operation=ChangeType.MERGE, value=100, type="int64")
+
+        self.assertEqual(c1.type, "uint32")
+        self.assertEqual(c1, c2)
+        self.assertNotEqual(c1, c3)
+        # Verify tuple comparison backward compatibility
+        self.assertEqual(c1, ("/interfaces/interface", ChangeType.MERGE, 100))
+
+    def test_parse_gnmi_operations(self):
+        from ui.cmd import parse_operation_item
+
+        # 1. Capability
+        op_cap = parse_operation_item({"capability": {}}, protocol=Protocol.GNMI)
+        self.assertIsInstance(op_cap, CapabilitiesOperation)
+
+        # 2. Get with type and encoding
+        op_get = parse_operation_item({
+            "get": {
+                "type": "state",
+                "encoding": "proto",
+                "prefix": "openconfig:",
+                "path": ["system/state/hostname"]
+            }
+        }, protocol=Protocol.GNMI)
+        self.assertIsInstance(op_get, GetOperation)
+        self.assertEqual(op_get.read_scope, "state")
+        self.assertEqual(op_get.protocol_options.encoding, "proto")
+        self.assertEqual(op_get.selector.prefix, "openconfig:")
+        self.assertEqual(op_get.selector.paths, ("system/state/hostname",))
+
+        # 3. Set with structured mappings, string delimiter, and delete
+        op_set = parse_operation_item({
+            "set": {
+                "prefix": "openconfig:",
+                "delete": ["interfaces/interface[name=mgmt0]/config/description"],
+                "update": [
+                    {"path": "interfaces/interface[name=mgmt0]/config/description", "val": "desc1", "type": "string"},
+                    "system/config/hostname:::spine-01",
+                ],
+                "replace": [
+                    {"path": "interfaces/interface[name=mgmt0]/config/mtu:::1500"}
+                ]
+            }
+        }, protocol=Protocol.GNMI)
+        self.assertIsInstance(op_set, SetOperation)
+        self.assertEqual(op_set.prefix, "openconfig:")
+        self.assertEqual(len(op_set.changes), 4)
+
+        # delete change
+        self.assertEqual(op_set.changes[0].path, "interfaces/interface[name=mgmt0]/config/description")
+        self.assertEqual(op_set.changes[0].operation, ChangeType.DELETE)
+
+        # update 1 (structured)
+        self.assertEqual(op_set.changes[1].path, "interfaces/interface[name=mgmt0]/config/description")
+        self.assertEqual(op_set.changes[1].operation, ChangeType.MERGE)
+        self.assertEqual(op_set.changes[1].value, "desc1")
+        self.assertEqual(op_set.changes[1].type, "string")
+
+        # update 2 (string delimiter)
+        self.assertEqual(op_set.changes[2].path, "system/config/hostname")
+        self.assertEqual(op_set.changes[2].operation, ChangeType.MERGE)
+        self.assertEqual(op_set.changes[2].value, "spine-01")
+
+        # replace 1 (path with delimiter and omitted val)
+        self.assertEqual(op_set.changes[3].path, "interfaces/interface[name=mgmt0]/config/mtu")
+        self.assertEqual(op_set.changes[3].operation, ChangeType.REPLACE)
+        self.assertEqual(op_set.changes[3].value, "1500")
+
+    def test_parse_gnmi_set_error_handling(self):
+        from ui.cmd import parse_operation_item, FileConfigError
+
+        # String without delimiter
+        with self.assertRaises(FileConfigError) as ctx:
+            parse_operation_item({"set": {"update": ["invalid-string-no-delimiter"]}}, protocol=Protocol.GNMI)
+        self.assertIn("must follow 'path:::value' notation", str(ctx.exception))
+
+        # Dict without val and without delimiter in path
+        with self.assertRaises(FileConfigError) as ctx:
+            parse_operation_item({"set": {"update": [{"path": "/some/path"}]}}, protocol=Protocol.GNMI)
+        self.assertIn("Missing value for mutation path", str(ctx.exception))
+
+    def test_file_config_builder_gnmi_operations_list_and_deprecation(self):
+        import tempfile
+        from ui.cmd import FileConfigBuilder, FileConfigError
+
+        # Valid operations list for gNMI
+        valid_yaml = """
+protocol: "gnmi"
+targets:
+  172.20.20.2:57401:
+    username: "admin"
+    password: "pwd"
+    operations:
+      - capability: {}
+      - get:
+          path:
+            - "openconfig:/system/state/hostname"
+      - set:
+          update:
+            - path: "openconfig:/interfaces/interface[name=mgmt0]/config/description"
+              val: "test"
+"""
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+            f.write(valid_yaml)
+            valid_path = f.name
+
+        try:
+            parsed = FileConfigBuilder(valid_path, protocol="gnmi").build()
+            self.assertEqual(len(parsed.sessions), 1)
+            sess = parsed.sessions[0]
+            self.assertEqual(len(sess.operations), 3)
+            self.assertIsInstance(sess.operations[0], CapabilitiesOperation)
+            self.assertIsInstance(sess.operations[1], GetOperation)
+            self.assertIsInstance(sess.operations[2], SetOperation)
+        finally:
+            if os.path.exists(valid_path):
+                os.remove(valid_path)
+
+        # Deprecated legacy field should raise FileConfigError
+        deprecated_yaml = """
+protocol: "gnmi"
+targets:
+  172.20.20.2:57401:
+    username: "admin"
+    password: "pwd"
+    get-path:
+      - "openconfig:/system/state/hostname"
+"""
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+            f.write(deprecated_yaml)
+            dep_path = f.name
+
+        try:
+            with self.assertRaises(FileConfigError) as ctx:
+                FileConfigBuilder(dep_path, protocol="gnmi").build()
+            self.assertIn("deprecated field 'get-path'", str(ctx.exception))
+        finally:
+            if os.path.exists(dep_path):
+                os.remove(dep_path)
+
 
 if __name__ == "__main__":
     unittest.main()
