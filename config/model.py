@@ -89,8 +89,18 @@ class SessionConfig:
     """Top-level session definition pairing connection, protocol, and intent."""
     connection: ConnectionConfig       # connection part
     protocol: Protocol                 # protocol session
-    operation: OperationConfig         # defined services of `protocol`
+    operation: Optional[OperationConfig] = None   # primary/legacy operation of `protocol`
+    operations: tuple[OperationConfig, ...] = ()  # sequential list of operations
     execution: ExecutionConfig = field(default_factory=ExecutionConfig) 
+
+    def __post_init__(self):
+        if self.operation is not None and not self.operations:
+            object.__setattr__(self, 'operations', (self.operation,))
+        elif self.operations:
+            ops_tuple = tuple(self.operations)
+            object.__setattr__(self, 'operations', ops_tuple)
+            if self.operation is None and ops_tuple:
+                object.__setattr__(self, 'operation', ops_tuple[0])
 
     @property
     def target(self) -> str:
@@ -196,12 +206,13 @@ class SessionConfig:
         return "default"
 
     def validate(self) -> None:
-        """Validate session parameters and underlying operation."""
-        if hasattr(self.operation, 'validate') and callable(self.operation.validate):
-            self.operation.validate()
-        elif hasattr(self.operation, 'protocol_options') and self.operation.protocol_options is not None:
-            if hasattr(self.operation.protocol_options, 'validate'):
-                self.operation.protocol_options.validate()
+        """Validate session parameters and underlying operation(s)."""
+        for op in self.operations:
+            if hasattr(op, 'validate') and callable(op.validate):
+                op.validate()
+            elif hasattr(op, 'protocol_options') and op.protocol_options is not None:
+                if hasattr(op.protocol_options, 'validate'):
+                    op.protocol_options.validate()
 
 # ================
 # Output Classes

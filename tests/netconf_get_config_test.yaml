@@ -4,9 +4,11 @@ targets:
   172.20.20.2:830:
     username: "admin"
     password: "NokiaSrl1!"
-    operation: "get-config"
-    source: "running"
-    filter: "<interfaces xmlns=\"http://openconfig.net/yang/interfaces\"><interface><name>mgmt0</name><config/></interface></interfaces>"
+    operations:
+      - get-config:
+          source: "running"
+          filter: "<interfaces xmlns=\"http://openconfig.net/yang/interfaces\"><interface><name>mgmt0</name><config/></interface></interfaces>"
+          filter_type: "subtree"
 
 outputs:
   default_output:

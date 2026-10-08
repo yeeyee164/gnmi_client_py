@@ -248,8 +248,13 @@ class GNMIFormatter(ProtocolFormatter):
         
         All formats were depending on `rpc`.
         """
+        if isinstance(raw_data, Exception):
+            err_dict = {"error": str(raw_data)}
+            if meta:
+                err_dict.update(meta)
+            return err_dict
 
-        rpc = rpc.lower()
+        rpc = (rpc or "").lower()
         if rpc == 'subscribe':
             return self._format_subscribe(raw_data, meta)
         elif rpc == 'get':
@@ -263,6 +268,8 @@ class GNMIFormatter(ProtocolFormatter):
         return str(raw_data)
 
     def format_text(self, raw_data):
+        if isinstance(raw_data, Exception):
+            return f"Error: {raw_data}"
         if hasattr(raw_data, 'DESCRIPTOR'):
             return text_format.MessageToString(raw_data)
         return str(raw_data)
@@ -320,6 +327,15 @@ class NETCONFFormatter(ProtocolFormatter):
             res['data'] = raw_data
             return res
 
+        if isinstance(raw_data, list):
+            res['data'] = [
+                self.format_json(item.get('data'), rpc=item.get('rpc', ''), meta=None)
+                if isinstance(item, dict) and 'data' in item
+                else item
+                for item in raw_data
+            ]
+            return res
+
         if res_rpc == 'get-schema':
             if hasattr(raw_data, 'data'):
                 res['data'] = raw_data.data
@@ -361,7 +377,15 @@ class NETCONFFormatter(ProtocolFormatter):
             return str(raw_data)
 
         if isinstance(raw_data, list):
-            return "\n".join(str(item) for item in raw_data)
+            lines = []
+            for item in raw_data:
+                if isinstance(item, dict) and 'rpc' in item and 'data' in item:
+                    item_rpc = item.get('rpc', '')
+                    item_text = self.format_text(item.get('data'))
+                    lines.append(f"--- [Operation: {item_rpc}] ---\n{item_text}")
+                else:
+                    lines.append(str(item))
+            return "\n".join(lines)
 
         if hasattr(raw_data, 'data'):
             return raw_data.data

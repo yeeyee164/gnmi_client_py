@@ -1,0 +1,41 @@
+protocol: "gnmi"
+insecure: true
+
+targets:
+  172.20.20.2:57401:
+    username: "admin"
+    password: "NokiaSrl1!"
+    operations:
+      # Step 1: Query capabilities
+      - capability: {}
+
+      # Step 2: Read initial system state
+      - get:
+          path:
+            - "openconfig:/system/state/hostname"
+
+      # Step 3: Apply mutation using path:::value notation
+      - set:
+          update:
+            - path: "openconfig:/interfaces/interface[name=mgmt0]/config/description:::Pipeline-Managed-Interface"
+
+      # Step 4: Validate mutated config
+      - get:
+          path:
+            - "openconfig:/interfaces/interface[name=mgmt0]/config/description"
+
+      # Step 5: Clean up / revert configuration
+      - set:
+          delete:
+            - "openconfig:/interfaces/interface[name=mgmt0]/config/description"
+
+      # Step 6: Validate revert
+      - get:
+          path:
+            - "openconfig:/interfaces/interface[name=mgmt0]/config/description"
+
+outputs:
+  default_output:
+    output-type: stdout
+    format: json
+

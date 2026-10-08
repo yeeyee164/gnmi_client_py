@@ -78,3 +78,20 @@ class BaseClient(ABC):
         raise UnsupportedOperationError(
             f"{self.__class__.__name__} does not support schema operations."
         )
+
+    def execute(self, operation: Any) -> Any:
+        """Executes a semantic operation by dispatching to the appropriate execute_* method."""
+        if isinstance(operation, CapabilitiesOperation):
+            return self.execute_capabilities(operation)
+        elif isinstance(operation, GetSchemaOperation):
+            return self.execute_schema(operation)
+        elif isinstance(operation, GetOperation):
+            return self.execute_get(operation)
+        elif isinstance(operation, SetOperation):
+            return self.execute_set(operation)
+        elif isinstance(operation, SubscribeOperation):
+            return self.execute_subscribe(operation=operation)
+        else:
+            raise UnsupportedOperationError(
+                f"{self.__class__.__name__} does not support operation {type(operation).__name__}."
+            )

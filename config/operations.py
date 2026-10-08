@@ -46,14 +46,44 @@ class ChangeType(str, Enum):
     REMOVE = "remove"
 
 @dataclass(frozen=True, kw_only=True)
+class GetConfigOperation(GetOperation):
+    r"""
+    Retrieval of configuration datastores
+
+    Probably Affected protocols:
+        - gNMI Get(type: config)
+        - NETCONF \<get-config\>
+    """
+    read_scope: str = "config"
+
+    def __init__(
+        self,
+        selector: Optional[Selector] = None,
+        read_scope: str = "config",
+        protocol_options: Optional[BaseProtocolOptions] = None,
+        **kwargs,
+    ):
+        sel = kwargs.get('selector', selector)
+        if sel is None:
+            sel = PathSelector(paths=())
+        object.__setattr__(self, 'selector', sel)
+        object.__setattr__(self, 'read_scope', read_scope)
+        object.__setattr__(self, 'protocol_options', kwargs.get('protocol_options', protocol_options))
+
+@dataclass(frozen=True, kw_only=True)
 class Change:
     """Atomic mutation intent."""
     path: str
     operation: ChangeType = ChangeType.MERGE
     value: Any = None
+    type: Optional[str] = None
 
-    def __eq__(self, path_val:tuple):
-        return (self.path, self.operation, self.value) == path_val
+    def __eq__(self, other):
+        if isinstance(other, tuple):
+            return (self.path, self.operation, self.value) == other[:3]
+        if isinstance(other, Change):
+            return (self.path, self.operation, self.value, self.type) == (other.path, other.operation, other.value, other.type)
+        return False
 
 @dataclass(frozen=True, kw_only=True)
 class SetOperation(OperationConfig):
@@ -78,6 +108,17 @@ class SetOperation(OperationConfig):
     def validate(self) -> None:
         if self.protocol_options is not None and hasattr(self.protocol_options, 'validate'):
             self.protocol_options.validate()
+
+@dataclass(frozen=True, kw_only=True)
+class EditConfigOperation(SetOperation):
+    r"""
+    Mutation of configuration datastores
+
+    Probably Affected protocols:
+        - gNMI Set(maybe)
+        - NETCONF \<edit-config\>
+    """
+    pass
 
 @dataclass(frozen=True, kw_only=True)
 class SubscribeOperation(OperationConfig):

@@ -24,9 +24,11 @@ from config import (
     CapabilitiesOperation,
     GetSchemaOperation,
     GetOperation,
+    GetConfigOperation,
     ChangeType,
     Change,
     SetOperation,
+    EditConfigOperation,
     SubscribeOperation,
     GNMIOptions,
     GnmiOptions,
@@ -413,6 +415,280 @@ class TestWorkersAndManagersSemanticIntegration(unittest.TestCase):
         s2 = SubscribeSession(config=sub_sess_poll)
         self.assertFalse(s1.is_poll_mode())
         self.assertTrue(s2.is_poll_mode())
+
+    def test_session_config_with_operations_pipeline(self):
+        conn = ConnectionConfig(target="172.20.20.2:830")
+        cap_op = CapabilitiesOperation()
+        schema_op = GetSchemaOperation(identifier="openconfig-interfaces")
+        get_cfg_op = GetConfigOperation(
+            selector=FilterSelector(expression="<interfaces/>", filter_type="subtree"),
+            protocol_options=NetconfOptions(source="running")
+        )
+        edit_cfg_op = EditConfigOperation(
+            protocol_options=NetconfOptions(target_datastore="candidate", default_operation="merge")
+        )
+
+        session = SessionConfig(
+            connection=conn,
+            protocol=Protocol.NETCONF,
+            operations=[cap_op, schema_op, get_cfg_op, edit_cfg_op]
+        )
+
+        self.assertEqual(len(session.operations), 4)
+        self.assertIs(session.operation, cap_op)
+        self.assertEqual(session.target, "172.20.20.2:830")
+        self.assertIsInstance(session.operations[2], GetConfigOperation)
+        self.assertIsInstance(session.operations[2], GetOperation)
+        self.assertIsInstance(session.operations[3], EditConfigOperation)
+        self.assertIsInstance(session.operations[3], SetOperation)
+
+    def test_base_client_execute_dispatch(self):
+        from specs.base_client import BaseClient
+        class MockClient(BaseClient):
+            def __exit__(self, *args): pass
+            def execute_capabilities(self, op): return "CAP_OK"
+            def execute_schema(self, op): return "SCHEMA_OK"
+            def execute_get(self, op): return "GET_OK"
+            def execute_set(self, op): return "SET_OK"
+            def execute_subscribe(self, **kwargs): return "SUB_OK"
+
+        client = MockClient()
+        self.assertEqual(client.execute(CapabilitiesOperation()), "CAP_OK")
+        self.assertEqual(client.execute(GetSchemaOperation(identifier="m")), "SCHEMA_OK")
+        self.assertEqual(client.execute(GetConfigOperation()), "GET_OK")
+        self.assertEqual(client.execute(GetOperation(selector=PathSelector(paths=()))), "GET_OK")
+        self.assertEqual(client.execute(EditConfigOperation()), "SET_OK")
+        self.assertEqual(client.execute(SetOperation()), "SET_OK")
+        self.assertEqual(client.execute(SubscribeOperation(selector=PathSelector(paths=()), delivery=DeliveryPolicy())), "SUB_OK")
+
+    def test_parse_operation_mapping_syntax(self):
+        from ui.cmd import parse_operation_item
+        op1 = parse_operation_item({"capability": {}})
+        self.assertIsInstance(op1, CapabilitiesOperation)
+
+        op2 = parse_operation_item({"get-schema": {"identifier": "openconfig-interfaces", "version": "2024-04-04"}})
+        self.assertIsInstance(op2, GetSchemaOperation)
+        self.assertEqual(op2.identifier, "openconfig-interfaces")
+        self.assertEqual(op2.version, "2024-04-04")
+
+        op3 = parse_operation_item({"get-config": {"source": "running", "filter": "<interfaces/>", "filter_type": "subtree"}})
+        self.assertIsInstance(op3, GetConfigOperation)
+        self.assertEqual(op3.read_scope, "config")
+        self.assertEqual(op3.selector.expression, "<interfaces/>")
+        self.assertEqual(op3.protocol_options.source, "running")
+
+        op4 = parse_operation_item({"get": {"filter": "/interfaces", "filter_type": "xpath"}})
+        self.assertIsInstance(op4, GetOperation)
+        self.assertEqual(op4.read_scope, "all")
+        self.assertEqual(op4.selector.expression, "/interfaces")
+
+        op5 = parse_operation_item({"edit-config": {"target": "candidate", "config": "<data/>", "default_operation": "replace"}})
+        self.assertIsInstance(op5, EditConfigOperation)
+        self.assertEqual(op5.protocol_options.target_datastore, "candidate")
+        self.assertEqual(op5.protocol_options.config, "<data/>")
+        self.assertEqual(op5.protocol_options.default_operation, "replace")
+
+    def test_parse_operation_object_syntax(self):
+        from ui.cmd import parse_operation_item
+        op1 = parse_operation_item({"operation": "get-schema", "identifier": "ietf-interfaces"})
+        self.assertIsInstance(op1, GetSchemaOperation)
+        self.assertEqual(op1.identifier, "ietf-interfaces")
+
+        op2 = parse_operation_item({"operation": "get-config", "source": "candidate"})
+        self.assertIsInstance(op2, GetConfigOperation)
+        self.assertEqual(op2.protocol_options.source, "candidate")
+
+    def test_parse_operation_validation_errors(self):
+        from ui.cmd import parse_operation_item, FileConfigError
+        # Missing mandatory identifier
+        with self.assertRaises(FileConfigError):
+            parse_operation_item({"get-schema": {}})
+
+        # Unknown operation type
+        with self.assertRaises(FileConfigError):
+            parse_operation_item({"unsupported-rpc": {}})
+
+        # Non-dictionary input
+        with self.assertRaises(FileConfigError):
+            parse_operation_item("get-config")
+
+    def test_file_config_builder_operations_list_parsing(self):
+        import tempfile
+        from ui.cmd import FileConfigBuilder
+
+        yaml_content = """
+protocol: "netconf"
+targets:
+  172.20.20.2:830:
+    username: "admin"
+    password: "pwd"
+    operations:
+      - capability: {}
+      - get-schema:
+          identifier: "openconfig-interfaces"
+      - get-config:
+          source: "running"
+          filter: "<interfaces/>"
+"""
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+            f.write(yaml_content)
+            temp_path = f.name
+
+        try:
+            parsed = FileConfigBuilder(temp_path, protocol="netconf").build()
+            self.assertEqual(len(parsed.sessions), 1)
+            sess = parsed.sessions[0]
+            self.assertEqual(sess.target, "172.20.20.2:830")
+            self.assertEqual(len(sess.operations), 3)
+            self.assertIsInstance(sess.operations[0], CapabilitiesOperation)
+            self.assertIsInstance(sess.operations[1], GetSchemaOperation)
+            self.assertIsInstance(sess.operations[2], GetConfigOperation)
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
+    def test_change_dataclass_with_type(self):
+        c1 = Change(path="/interfaces/interface", operation=ChangeType.MERGE, value=100, type="uint32")
+        c2 = Change(path="/interfaces/interface", operation=ChangeType.MERGE, value=100, type="uint32")
+        c3 = Change(path="/interfaces/interface", operation=ChangeType.MERGE, value=100, type="int64")
+
+        self.assertEqual(c1.type, "uint32")
+        self.assertEqual(c1, c2)
+        self.assertNotEqual(c1, c3)
+        # Verify tuple comparison backward compatibility
+        self.assertEqual(c1, ("/interfaces/interface", ChangeType.MERGE, 100))
+
+    def test_parse_gnmi_operations(self):
+        from ui.cmd import parse_operation_item
+
+        # 1. Capability
+        op_cap = parse_operation_item({"capability": {}}, protocol=Protocol.GNMI)
+        self.assertIsInstance(op_cap, CapabilitiesOperation)
+
+        # 2. Get with type and encoding
+        op_get = parse_operation_item({
+            "get": {
+                "type": "state",
+                "encoding": "proto",
+                "prefix": "openconfig:",
+                "path": ["system/state/hostname"]
+            }
+        }, protocol=Protocol.GNMI)
+        self.assertIsInstance(op_get, GetOperation)
+        self.assertEqual(op_get.read_scope, "state")
+        self.assertEqual(op_get.protocol_options.encoding, "proto")
+        self.assertEqual(op_get.selector.prefix, "openconfig:")
+        self.assertEqual(op_get.selector.paths, ("system/state/hostname",))
+
+        # 3. Set with structured mappings, string delimiter, and delete
+        op_set = parse_operation_item({
+            "set": {
+                "prefix": "openconfig:",
+                "delete": ["interfaces/interface[name=mgmt0]/config/description"],
+                "update": [
+                    {"path": "interfaces/interface[name=mgmt0]/config/description", "val": "desc1", "type": "string"},
+                    "system/config/hostname:::spine-01",
+                ],
+                "replace": [
+                    {"path": "interfaces/interface[name=mgmt0]/config/mtu:::1500"}
+                ]
+            }
+        }, protocol=Protocol.GNMI)
+        self.assertIsInstance(op_set, SetOperation)
+        self.assertEqual(op_set.prefix, "openconfig:")
+        self.assertEqual(len(op_set.changes), 4)
+
+        # delete change
+        self.assertEqual(op_set.changes[0].path, "interfaces/interface[name=mgmt0]/config/description")
+        self.assertEqual(op_set.changes[0].operation, ChangeType.DELETE)
+
+        # update 1 (structured)
+        self.assertEqual(op_set.changes[1].path, "interfaces/interface[name=mgmt0]/config/description")
+        self.assertEqual(op_set.changes[1].operation, ChangeType.MERGE)
+        self.assertEqual(op_set.changes[1].value, "desc1")
+        self.assertEqual(op_set.changes[1].type, "string")
+
+        # update 2 (string delimiter)
+        self.assertEqual(op_set.changes[2].path, "system/config/hostname")
+        self.assertEqual(op_set.changes[2].operation, ChangeType.MERGE)
+        self.assertEqual(op_set.changes[2].value, "spine-01")
+
+        # replace 1 (path with delimiter and omitted val)
+        self.assertEqual(op_set.changes[3].path, "interfaces/interface[name=mgmt0]/config/mtu")
+        self.assertEqual(op_set.changes[3].operation, ChangeType.REPLACE)
+        self.assertEqual(op_set.changes[3].value, "1500")
+
+    def test_parse_gnmi_set_error_handling(self):
+        from ui.cmd import parse_operation_item, FileConfigError
+
+        # String without delimiter
+        with self.assertRaises(FileConfigError) as ctx:
+            parse_operation_item({"set": {"update": ["invalid-string-no-delimiter"]}}, protocol=Protocol.GNMI)
+        self.assertIn("must follow 'path:::value' notation", str(ctx.exception))
+
+        # Dict without val and without delimiter in path
+        with self.assertRaises(FileConfigError) as ctx:
+            parse_operation_item({"set": {"update": [{"path": "/some/path"}]}}, protocol=Protocol.GNMI)
+        self.assertIn("Missing value for mutation path", str(ctx.exception))
+
+    def test_file_config_builder_gnmi_operations_list_and_deprecation(self):
+        import tempfile
+        from ui.cmd import FileConfigBuilder, FileConfigError
+
+        # Valid operations list for gNMI
+        valid_yaml = """
+protocol: "gnmi"
+targets:
+  172.20.20.2:57401:
+    username: "admin"
+    password: "pwd"
+    operations:
+      - capability: {}
+      - get:
+          path:
+            - "openconfig:/system/state/hostname"
+      - set:
+          update:
+            - path: "openconfig:/interfaces/interface[name=mgmt0]/config/description"
+              val: "test"
+"""
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+            f.write(valid_yaml)
+            valid_path = f.name
+
+        try:
+            parsed = FileConfigBuilder(valid_path, protocol="gnmi").build()
+            self.assertEqual(len(parsed.sessions), 1)
+            sess = parsed.sessions[0]
+            self.assertEqual(len(sess.operations), 3)
+            self.assertIsInstance(sess.operations[0], CapabilitiesOperation)
+            self.assertIsInstance(sess.operations[1], GetOperation)
+            self.assertIsInstance(sess.operations[2], SetOperation)
+        finally:
+            if os.path.exists(valid_path):
+                os.remove(valid_path)
+
+        # Deprecated legacy field should raise FileConfigError
+        deprecated_yaml = """
+protocol: "gnmi"
+targets:
+  172.20.20.2:57401:
+    username: "admin"
+    password: "pwd"
+    get-path:
+      - "openconfig:/system/state/hostname"
+"""
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+            f.write(deprecated_yaml)
+            dep_path = f.name
+
+        try:
+            with self.assertRaises(FileConfigError) as ctx:
+                FileConfigBuilder(dep_path, protocol="gnmi").build()
+            self.assertIn("deprecated field 'get-path'", str(ctx.exception))
+        finally:
+            if os.path.exists(dep_path):
+                os.remove(dep_path)
 
 
 if __name__ == "__main__":
