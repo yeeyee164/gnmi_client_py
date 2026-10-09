@@ -14,7 +14,7 @@ from config.operations import (
     SetOperation,
     GetSchemaOperation,
     ChangeType,
-    NetconfTransactionOperation,
+    TransactionOperation,
 )
 
 logger = logging.getLogger(__name__)
@@ -77,7 +77,7 @@ class BaseUnaryWorker:
             return "get-config" if getattr(op, 'read_scope', '') == "config" else "get"
         elif isinstance(op, SetOperation):
             return "edit-config" if self.protocol == "netconf" else "set"
-        elif isinstance(op, NetconfTransactionOperation):
+        elif isinstance(op, TransactionOperation):
             return op.operation.value if hasattr(op.operation, 'value') else str(op.operation)
         elif isinstance(op, str) and op:
             return op
@@ -241,7 +241,7 @@ class TransactionWorker(BaseUnaryWorker):
         logger.debug(f"[Worker(Transaction) {self.target_ip}] Requesting Transaction ({rpc_name})...")
         try:
             with self._get_client() as client:
-                if isinstance(self.operation, NetconfTransactionOperation):
+                if isinstance(self.operation, TransactionOperation):
                     result = client.execute_transaction(self.operation)
                 elif hasattr(client, 'execute_transaction'):
                     result = client.execute_transaction(self.operation)
