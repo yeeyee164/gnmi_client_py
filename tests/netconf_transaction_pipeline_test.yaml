@@ -1,0 +1,27 @@
+protocol: "netconf"
+
+targets:
+  172.20.20.2:830:
+    username: "admin"
+    password: "NokiaSrl1!"
+    operations:
+      - edit-config:
+          target: "candidate"
+          config: "tests/netconf_edit_desc.xml"
+          commit: false
+      - validate:
+          source: "candidate"
+      - commit:
+          confirmed: false
+      - get-config:
+          source: "running"
+          filter: "<interfaces xmlns=\"http://openconfig.net/yang/interfaces\"><interface><name>mgmt0</name></interface></interfaces>"
+      - edit-config:
+          target: "candidate"
+          config: "tests/netconf_delete_desc.xml"
+          commit: true
+
+outputs:
+  default_output:
+    output-type: stdout
+    format: json

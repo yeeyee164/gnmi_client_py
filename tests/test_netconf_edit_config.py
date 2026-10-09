@@ -55,8 +55,8 @@ class TestNetconfEditConfig(unittest.TestCase):
         mock_reply.data_xml = None
         mock_reply.xml = '<?xml version="1.0" encoding="UTF-8"?><rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"><ok/></rpc-reply>'
         
-        with patch('modules.formatter.xmltodict.parse') as mock_parse:
-            mock_parse.return_value = {'rpc-reply': {'ok': None}}
+        with patch('modules.formatter.xmltodict') as mock_xmltodict:
+            mock_xmltodict.parse.return_value = {'rpc-reply': {'ok': None}}
             result = formatter.format_json(mock_reply, rpc="edit-config")
             self.assertEqual(result['data'], {"ok": True})
             self.assertIsNone(result['error'])
