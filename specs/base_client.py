@@ -8,6 +8,7 @@ from config.operations import (
     SetOperation,
     SubscribeOperation,
     GetSchemaOperation,
+    TransactionOperation,
 )
 from config.protocol_options.base import BaseProtocolOptions
 from config.selectors import Selector
@@ -79,6 +80,12 @@ class BaseClient(ABC):
             f"{self.__class__.__name__} does not support schema operations."
         )
 
+    def execute_transaction(self, operation: TransactionOperation) -> Any:
+        """Executes transaction lifecycle operations based on TransactionOperation."""
+        raise UnsupportedOperationError(
+            f"{self.__class__.__name__} does not support transaction operations."
+        )
+
     def execute(self, operation: Any) -> Any:
         """Executes a semantic operation by dispatching to the appropriate execute_* method."""
         if isinstance(operation, CapabilitiesOperation):
@@ -91,6 +98,8 @@ class BaseClient(ABC):
             return self.execute_set(operation)
         elif isinstance(operation, SubscribeOperation):
             return self.execute_subscribe(operation=operation)
+        elif isinstance(operation, TransactionOperation):
+            return self.execute_transaction(operation)
         else:
             raise UnsupportedOperationError(
                 f"{self.__class__.__name__} does not support operation {type(operation).__name__}."

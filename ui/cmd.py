@@ -47,6 +47,8 @@ from config.operations import (
     SetOperation,
     EditConfigOperation,
     SubscribeOperation,
+    NetconfTransactionOperation,
+    TransactionType,
 )
 from config.protocol_options import (
     GNMIOptions,
@@ -436,6 +438,12 @@ class CLIConfigBuilder(ConfigBuilder):
                     error_opt = getattr(self.args, "error_option", "stop-on-error")
                     test_opt = getattr(self.args, "test_option", None)
                     commit_val = getattr(self.args, "commit", True)
+                    lock_val = getattr(self.args, "lock_target", False) or getattr(self.args, "lock", False)
+                    val_candidate = getattr(self.args, "validate_candidate", False) or getattr(self.args, "validate", False)
+                    confirmed_val = getattr(self.args, "confirmed", False)
+                    confirm_timeout_val = getattr(self.args, "confirm_timeout", None)
+                    persist_val = getattr(self.args, "persist", "")
+                    persist_id_val = getattr(self.args, "persist_id", "")
 
                     nc_opts = NetconfOptions(
                         target_datastore=target_ds,
@@ -443,11 +451,37 @@ class CLIConfigBuilder(ConfigBuilder):
                         default_operation=default_op,
                         error_option=error_opt,
                         test_option=test_opt,
-                        commit=commit_val
+                        commit=commit_val,
+                        lock_target=bool(lock_val),
+                        validate_candidate=bool(val_candidate),
+                        confirmed=bool(confirmed_val),
+                        confirm_timeout=confirm_timeout_val,
+                        persist=persist_val,
+                        persist_id=persist_id_val,
                     )
                     op_obj = SetOperation(
                         changes=(),
                         protocol_options=nc_opts
+                    )
+                elif operation in ('commit', 'cancel-commit', 'cancel_commit', 'discard-changes', 'discard_changes'):
+                    confirmed_val = getattr(self.args, "confirmed", False)
+                    confirm_timeout_val = getattr(self.args, "confirm_timeout", None)
+                    persist_val = getattr(self.args, "persist", "")
+                    persist_id_val = getattr(self.args, "persist_id", "")
+
+                    if operation == 'commit':
+                        tx_type = TransactionType.COMMIT
+                    elif operation in ('cancel-commit', 'cancel_commit'):
+                        tx_type = TransactionType.CANCEL_COMMIT
+                    else:
+                        tx_type = TransactionType.DISCARD_CHANGES
+
+                    op_obj = NetconfTransactionOperation(
+                        operation=tx_type,
+                        confirmed=bool(confirmed_val),
+                        confirm_timeout=confirm_timeout_val,
+                        persist=persist_val,
+                        persist_id=persist_id_val,
                     )
                 elif operation == 'subscribe':
                     raw_filter = read_payload(getattr(self.args, "filter", ""))
@@ -677,6 +711,12 @@ def parse_operation_item(op_item: Any, protocol: Protocol = Protocol.NETCONF) ->
         err_opt = op_params.get("error_option", "stop-on-error")
         test_opt = op_params.get("test_option")
         commit_val = op_params.get("commit", True)
+        lock_val = op_params.get("lock_target") or op_params.get("lock", False)
+        val_candidate = op_params.get("validate_candidate") or op_params.get("validate", False)
+        confirmed_val = op_params.get("confirmed", False)
+        confirm_timeout_val = op_params.get("confirm_timeout")
+        persist_val = op_params.get("persist", "")
+        persist_id_val = op_params.get("persist_id", "")
 
         nc_opts = NetconfOptions(
             target_datastore=target_ds,
@@ -685,15 +725,54 @@ def parse_operation_item(op_item: Any, protocol: Protocol = Protocol.NETCONF) ->
             error_option=err_opt,
             test_option=test_opt,
             commit=commit_val,
+            lock_target=bool(lock_val),
+            validate_candidate=bool(val_candidate),
+            confirmed=bool(confirmed_val),
+            confirm_timeout=confirm_timeout_val,
+            persist=persist_val,
+            persist_id=persist_id_val,
         )
         return EditConfigOperation(
             changes=(),
             protocol_options=nc_opts
         )
 
+    elif op_norm in ("lock", "unlock", "commit", "cancel-commit", "cancel_commit", "discard-changes", "discard_changes", "validate"):
+        target_ds = op_params.get("target_datastore") or op_params.get("target", "candidate")
+        source_ds = op_params.get("source_datastore") or op_params.get("source", "candidate")
+        confirmed_val = op_params.get("confirmed", False)
+        confirm_timeout_val = op_params.get("confirm_timeout")
+        persist_val = op_params.get("persist", "")
+        persist_id_val = op_params.get("persist_id", "")
+
+        if op_norm == "lock":
+            tx_type = TransactionType.LOCK
+        elif op_norm == "unlock":
+            tx_type = TransactionType.UNLOCK
+        elif op_norm == "commit":
+            tx_type = TransactionType.COMMIT
+        elif op_norm in ("cancel-commit", "cancel_commit"):
+            tx_type = TransactionType.CANCEL_COMMIT
+        elif op_norm in ("discard-changes", "discard_changes"):
+            tx_type = TransactionType.DISCARD_CHANGES
+        elif op_norm == "validate":
+            tx_type = TransactionType.VALIDATE
+        else:
+            raise FileConfigError(f"Unsupported transaction operation: {op_name}")
+
+        return NetconfTransactionOperation(
+            operation=tx_type,
+            target_datastore=target_ds,
+            source_datastore=source_ds,
+            confirmed=bool(confirmed_val),
+            confirm_timeout=confirm_timeout_val,
+            persist=persist_val,
+            persist_id=persist_id_val,
+        )
+
     else:
         raise FileConfigError(
-            f"Unsupported operation type '{op_name}'. Available: [capability, get, get-config, get-schema, edit-config, set]"
+            f"Unsupported operation type '{op_name}'. Available: [capability, get, get-config, get-schema, edit-config, set, lock, unlock, commit, cancel-commit, discard-changes, validate]"
         )
 
 
@@ -1168,6 +1247,37 @@ def netconf_args(parser):
                             help="Test option if target supports :validate")
     parser_set.add_argument('--no-commit', dest='commit', action='store_false', default=True,
                             help="Do not commit candidate datastore changes after edit-config")
+    parser_set.add_argument('--lock', dest='lock_target', action='store_true', default=False,
+                            help="Acquire datastore lock prior to edit-config and unlock in finally")
+    parser_set.add_argument('--validate', dest='validate_candidate', action='store_true', default=False,
+                            help="Validate candidate configuration before commit")
+    parser_set.add_argument('--confirmed', action='store_true', default=False,
+                            help="Request confirmed commit")
+    parser_set.add_argument('--confirm-timeout', dest='confirm_timeout', type=int, default=None,
+                            help="Confirmed commit timeout in seconds")
+    parser_set.add_argument('--persist', dest='persist', default="",
+                            help="Confirmed commit persist token")
+    parser_set.add_argument('--persist-id', dest='persist_id', default="",
+                            help="Confirmed commit persist-id token")
+
+    # <commit>
+    parser_commit = subparsers.add_parser('commit', help="NETCONF <commit>")
+    parser_commit.add_argument('--confirmed', action='store_true', default=False,
+                               help="Request confirmed commit")
+    parser_commit.add_argument('--confirm-timeout', dest='confirm_timeout', type=int, default=None,
+                               help="Confirmed commit timeout in seconds")
+    parser_commit.add_argument('--persist', dest='persist', default="",
+                               help="Confirmed commit persist token")
+    parser_commit.add_argument('--persist-id', dest='persist_id', default="",
+                               help="Confirmed commit persist-id token")
+
+    # <cancel-commit>
+    parser_cancel_commit = subparsers.add_parser('cancel-commit', aliases=['cancel_commit'], help="NETCONF <cancel-commit>")
+    parser_cancel_commit.add_argument('--persist-id', dest='persist_id', default="",
+                                      help="Cancel confirmed commit using persist-id token")
+
+    # <discard-changes>
+    parser_discard = subparsers.add_parser('discard-changes', aliases=['discard_changes'], help="NETCONF <discard-changes>")
 
 
 def gnmi_args(parser):

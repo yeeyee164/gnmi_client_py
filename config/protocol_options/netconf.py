@@ -17,6 +17,11 @@ class NetconfOptions(BaseProtocolOptions):
     commit: bool = True
     device: str = "default"
     lock_target: bool = False
+    validate_candidate: bool = False
+    confirmed: bool = False
+    confirm_timeout: Optional[int] = None
+    persist: str = ""
+    persist_id: str = ""
 
     def __post_init__(self):
         if self.source_datastore is not None and self.source == "running":
@@ -56,3 +61,15 @@ class NetconfOptions(BaseProtocolOptions):
                 raise ValueError(
                     f"Invalid test_option '{self.test_option}'. Must be one of {sorted(valid_test_options)}."
                 )
+
+        if self.confirm_timeout is not None and self.confirm_timeout <= 0:
+            raise ValueError(
+                f"Invalid confirm_timeout '{self.confirm_timeout}'. Must be a positive integer."
+            )
+
+        effective_target = (self.target_datastore or "").lower()
+        if self.confirmed and effective_target != "candidate":
+            raise ValueError("confirmed commit is only valid for the 'candidate' datastore.")
+
+        if self.validate_candidate and effective_target != "candidate":
+            raise ValueError("validate_candidate is only valid for the 'candidate' datastore.")

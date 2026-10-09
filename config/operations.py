@@ -135,3 +135,35 @@ class SubscribeOperation(OperationConfig):
             self.delivery.validate()
         if self.protocol_options is not None and hasattr(self.protocol_options, 'validate'):
             self.protocol_options.validate()
+
+class TransactionType(str, Enum):
+    """Define possible transactional operations among NB clients"""
+    LOCK = "lock"
+    UNLOCK = "unlock"
+    COMMIT = "commit"
+    CANCEL_COMMIT = "cancel-commit"
+    DISCARD_CHANGES = "discard-changes"
+    VALIDATE = "validate"
+
+@dataclass(frozen=True, kw_only=True)
+class TransactionOperation(OperationConfig):
+    """Define common transaction operations such as commit"""
+    operation: TransactionType
+    confirmed: bool = False
+    confirm_timeout: Optional[int] = None
+    protocol_options: Optional[BaseProtocolOptions] = None
+
+    def validate(self) -> None:
+        super().validate()
+        if self.confirm_timeout is not None and self.confirm_timeout <= 0:
+            raise ValueError(
+                f"Invalid confirm_timeout '{self.confirm_timeout}'. Must be a positive integer."
+            )
+
+@dataclass(frozen=True, kw_only=True)
+class NetconfTransactionOperation(TransactionOperation):
+    """Explicit NETCONF transaction lifecycle operations (RFC 6241)."""
+    target_datastore: str = "candidate"
+    source_datastore: str = "candidate"
+    persist: str = ""
+    persist_id: str = ""

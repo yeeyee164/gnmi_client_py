@@ -14,6 +14,7 @@ from config.operations import (
     SetOperation,
     GetSchemaOperation,
     ChangeType,
+    NetconfTransactionOperation,
 )
 
 logger = logging.getLogger(__name__)
@@ -76,6 +77,8 @@ class BaseUnaryWorker:
             return "get-config" if getattr(op, 'read_scope', '') == "config" else "get"
         elif isinstance(op, SetOperation):
             return "edit-config" if self.protocol == "netconf" else "set"
+        elif isinstance(op, NetconfTransactionOperation):
+            return op.operation.value if hasattr(op.operation, 'value') else str(op.operation)
         elif isinstance(op, str) and op:
             return op
         return self.kwargs.get('operation', 'operation')
@@ -229,6 +232,29 @@ class SetWorker(BaseUnaryWorker):
     def __str__(self):
         return "Set"
 
+class TransactionWorker(BaseUnaryWorker):
+    """
+    Executes a standalone transaction lifecycle operation (e.g. commit, discard-changes).
+    """
+    def start(self):
+        rpc_name = self._get_rpc_name(self.operation)
+        logger.debug(f"[Worker(Transaction) {self.target_ip}] Requesting Transaction ({rpc_name})...")
+        try:
+            with self._get_client() as client:
+                if isinstance(self.operation, NetconfTransactionOperation):
+                    result = client.execute_transaction(self.operation)
+                elif hasattr(client, 'execute_transaction'):
+                    result = client.execute_transaction(self.operation)
+                else:
+                    raise UnsupportedOperationError(f"Client does not support transaction operations: {client}")
+                return self._format_result("transaction", result)
+        except Exception as e:
+            logger.error(f"[Worker(Transaction) {self.target_ip}] Error: {e}")
+            return self._format_result("transaction", e)
+
+    def __str__(self):
+        return f"Transaction({self._get_rpc_name(self.operation)})"
+
 class SequentialWorker(BaseUnaryWorker):
     """
     Executes an ordered sequence of operations within a single client connection lifecycle.
@@ -241,12 +267,21 @@ class SequentialWorker(BaseUnaryWorker):
                 # operations holds each protocol RPC 'specifically'
                 for op in self.operations:
                     rpc_name = self._get_rpc_name(op)
+                    is_err = False
                     try:
                         res = client.execute(op)
+                        if isinstance(res, Exception):
+                            is_err = True
                     except Exception as e:
                         logger.error(f"[Worker(Sequential) {self.target_ip}] Error in operation '{rpc_name}': {e}")
                         res = e
+                        is_err = True
                     results.append(self._format_single_result(rpc_name, res, op=op))
+                    if is_err:
+                        logger.warning(
+                            f"[Worker(Sequential) {self.target_ip}] Aborting subsequent operations after error in '{rpc_name}'."
+                        )
+                        break
         except Exception as e:
             logger.error(f"[Worker(Sequential) {self.target_ip}] Session connection error: {e}")
             results.append(self._format_single_result("error", e))

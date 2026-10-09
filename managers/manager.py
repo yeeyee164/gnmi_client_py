@@ -1,9 +1,7 @@
 import time
 import threading
 import queue
-import json
 import concurrent.futures
-import dataclasses
 from typing import List, Optional, Tuple, Type, Any
 
 from managers.subscribe_session import SubscribeSession
@@ -13,17 +11,16 @@ from managers.unary_worker import (
     SetWorker,
     CapabilityWorker,
     SequentialWorker,
-    UnaryWorker,
+    TransactionWorker,
 )
 from modules.output import OutputHandler
-from config.model import SessionConfig, Protocol
 from config.operations import (
-    OperationConfig,
     CapabilitiesOperation,
     GetOperation,
     SetOperation,
     SubscribeOperation,
     GetSchemaOperation,
+    TransactionOperation,
 )
 
 import logging
@@ -218,6 +215,8 @@ class UnaryManager(BaseRPCManager):
             return SetWorker(config=sc)
         elif isinstance(op, CapabilitiesOperation):
             return CapabilityWorker(config=sc)
+        elif isinstance(op, TransactionOperation):
+            return TransactionWorker(config=sc)
         else:
             raise ValueError(f"Unsupported unary operation: {op}")
 
@@ -261,7 +260,7 @@ class ManagerFactory:
 
     @staticmethod
     def _is_unary_op(op: Any) -> bool:
-        return isinstance(op, (CapabilitiesOperation, GetOperation, SetOperation, GetSchemaOperation))
+        return isinstance(op, (CapabilitiesOperation, GetOperation, SetOperation, GetSchemaOperation, TransactionOperation))
 
     @staticmethod
     def _is_unary(session: Any) -> bool:

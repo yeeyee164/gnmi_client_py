@@ -19,9 +19,13 @@ from config.operations import (
     SubscribeOperation,
     GetSchemaOperation,
     ChangeType,
+    NetconfTransactionOperation,
+    TransactionType,
 )
 from config.selectors import PathSelector, FilterSelector
 from config.protocol_options import BaseProtocolOptions, NetconfOptions
+
+RPCError = getattr(operations, 'RPCError', Exception) if operations else Exception
 
 NETCONF_BASE_NS = "urn:ietf:params:xml:ns:netconf:base:1.0"
 NETCONF_NS = {
@@ -117,13 +121,19 @@ class NetconfClient(BaseClient):
         )
 
     def execute_set(self, operation: SetOperation) -> Any:
-        """Executes <edit-config> based on SetOperation and Change objects."""
+        """Executes <edit-config> within an RFC 6241 candidate transaction workflow."""
         target_ds = "candidate"
         default_op = "merge"
         error_opt = "stop-on-error"
         test_opt = None
         commit = True
         raw_config = None
+        lock_target = False
+        validate_candidate = False
+        confirmed = False
+        confirm_timeout = None
+        persist = ""
+        persist_id = ""
 
         if isinstance(operation.protocol_options, NetconfOptions):
             target_ds = operation.protocol_options.target_datastore
@@ -132,6 +142,12 @@ class NetconfClient(BaseClient):
             test_opt = operation.protocol_options.test_option
             commit = operation.protocol_options.commit
             raw_config = operation.protocol_options.config
+            lock_target = operation.protocol_options.lock_target
+            validate_candidate = operation.protocol_options.validate_candidate
+            confirmed = operation.protocol_options.confirmed
+            confirm_timeout = operation.protocol_options.confirm_timeout
+            persist = operation.protocol_options.persist
+            persist_id = operation.protocol_options.persist_id
 
         updates = []
         replaces = []
@@ -151,19 +167,84 @@ class NetconfClient(BaseClient):
             elif change.operation == ChangeType.REMOVE:
                 removes.append(val)
 
-        return self.set(
-            config=raw_config,
-            target_datastore=target_ds,
-            default_operation=default_op,
-            error_option=error_opt,
-            test_option=test_opt,
-            commit=commit,
-            updates=updates or None,
-            replaces=replaces or None,
-            deletes=deletes or None,
-            creates=creates or None,
-            removes=removes or None,
-        )
+        # Datastore capability fallback
+        if target_ds == 'candidate' and not self._has_capability(':candidate'):
+            logger.warning("[NetconfClient] Server does not advertise :candidate capability. Falling back to 'running'.")
+            target_ds = 'running'
+
+        locked = False
+        try:
+            if lock_target:
+                self.lock(target=target_ds)
+                locked = True
+
+            res = self.set(
+                config=raw_config,
+                target_datastore=target_ds,
+                default_operation=default_op,
+                error_option=error_opt,
+                test_option=test_opt,
+                commit=False,
+                updates=updates or None,
+                replaces=replaces or None,
+                deletes=deletes or None,
+                creates=creates or None,
+                removes=removes or None,
+            )
+            if isinstance(res, Exception):
+                raise res
+
+            if target_ds == 'candidate':
+                if validate_candidate:
+                    self.validate(source='candidate')
+                if commit:
+                    self.commit(
+                        confirmed=confirmed,
+                        confirm_timeout=confirm_timeout,
+                        persist=persist or None,
+                        persist_id=persist_id or None,
+                    )
+
+            return res
+
+        except Exception as e:
+            if target_ds == 'candidate' and self._has_capability(':candidate'):
+                try:
+                    self.discard_changes()
+                except Exception as discard_err:
+                    logger.warning(f"[NetconfClient] Failed to discard candidate changes during cleanup: {discard_err}")
+            raise
+        finally:
+            if locked:
+                try:
+                    self.unlock(target=target_ds)
+                except Exception as unlock_err:
+                    logger.warning(f"[NetconfClient] Failed to unlock {target_ds} in finally: {unlock_err}")
+
+    def execute_transaction(self, operation: NetconfTransactionOperation) -> Any:
+        """Executes explicit transaction lifecycle operations based on NetconfTransactionOperation."""
+        op_type = operation.operation
+        if op_type == TransactionType.LOCK:
+            return self.lock(target=operation.target_datastore)
+        elif op_type == TransactionType.UNLOCK:
+            return self.unlock(target=operation.target_datastore)
+        elif op_type == TransactionType.COMMIT:
+            return self.commit(
+                confirmed=operation.confirmed,
+                confirm_timeout=operation.confirm_timeout,
+                persist=operation.persist or None,
+                persist_id=operation.persist_id or None,
+            )
+        elif op_type == TransactionType.CANCEL_COMMIT:
+            return self.cancel_commit(persist_id=operation.persist_id or None)
+        elif op_type == TransactionType.DISCARD_CHANGES:
+            return self.discard_changes()
+        elif op_type == TransactionType.VALIDATE:
+            return self.validate(source=operation.source_datastore)
+        else:
+            raise UnsupportedOperationError(
+                f"[NetconfClient] Unknown transaction operation: {op_type}"
+            )
 
     def execute_subscribe(
         self,
@@ -253,8 +334,84 @@ class NetconfClient(BaseClient):
                     return self.session.get(filter=filter_xml)
                 else:
                     return self.session.get()
-        except operations.RPCError as e:
+        except RPCError as e:
             return e
+
+    def _has_capability(self, name: str) -> bool:
+        if not self.session or not hasattr(self.session, 'server_capabilities'):
+            return False
+        return any(name in cap for cap in self.session.server_capabilities)
+
+    def _check_capability(self, name: str) -> None:
+        if not self._has_capability(name):
+            raise UnsupportedOperationError(
+                f"[NetconfClient] Server does not advertise required capability '{name}'."
+            )
+
+    def lock(self, target: str = "candidate") -> Any:
+        try:
+            return self.session.lock(target=target)
+        except RPCError as e:
+            logger.error(f"[NetconfClient] lock({target}) failed: {e}")
+            raise
+
+    def unlock(self, target: str = "candidate") -> Any:
+        try:
+            return self.session.unlock(target=target)
+        except RPCError as e:
+            logger.error(f"[NetconfClient] unlock({target}) failed: {e}")
+            raise
+
+    def commit(
+        self,
+        confirmed: bool = False,
+        confirm_timeout: Optional[int] = None,
+        persist: Optional[str] = None,
+        persist_id: Optional[str] = None,
+    ) -> Any:
+        self._check_capability(":candidate")
+        kwargs: dict[str, Any] = {}
+        if confirmed:
+            self._check_capability(":confirmed-commit")
+            kwargs["confirmed"] = True
+            if confirm_timeout is not None:
+                kwargs["timeout"] = str(confirm_timeout)
+            if persist:
+                kwargs["persist"] = persist
+        if persist_id:
+            kwargs["persist_id"] = persist_id
+
+        try:
+            return self.session.commit(**kwargs)
+        except RPCError as e:
+            logger.error(f"[NetconfClient] commit failed: {e}")
+            raise
+
+    def cancel_commit(self, persist_id: Optional[str] = None) -> Any:
+        self._check_capability(":candidate")
+        self._check_capability(":confirmed-commit")
+        kwargs = {"persist_id": persist_id} if persist_id else {}
+        try:
+            return self.session.cancel_commit(**kwargs)
+        except RPCError as e:
+            logger.error(f"[NetconfClient] cancel-commit failed: {e}")
+            raise
+
+    def discard_changes(self) -> Any:
+        self._check_capability(":candidate")
+        try:
+            return self.session.discard_changes()
+        except RPCError as e:
+            logger.error(f"[NetconfClient] discard-changes failed: {e}")
+            raise
+
+    def validate(self, source: str = "candidate") -> Any:
+        self._check_capability(":validate")
+        try:
+            return self.session.validate(source=source)
+        except RPCError as e:
+            logger.error(f"[NetconfClient] validate({source}) failed: {e}")
+            raise
 
     def set(self,
             updates: Optional[list] = None,
@@ -388,17 +545,8 @@ class NetconfClient(BaseClient):
                 edit_kwargs['test_option'] = test_option
 
             res = self.session.edit_config(**edit_kwargs)
-
-            commit_requested = kwargs.get('commit', True)
-            if commit_requested and target_ds == 'candidate' and hasattr(self.session, 'commit'):
-                try:
-                    self.session.commit()
-                except operations.RPCError as e:
-                    logger.error(f"[NetconfClient] Commit failed: {e}")
-                    return e
-
             return res
-        except operations.RPCError as e:
+        except RPCError as e:
             return e
 
     def subscribe(self, request_iterator: Any) -> Iterator[Any]:
