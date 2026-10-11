@@ -18,16 +18,20 @@ from specs.base_client import BaseClient, UnsupportedOperationError
 from specs.stream_types import StreamCommandType, StreamCommand, StreamContext, StreamEvent
 from modules.path import parse_path
 from modules.security import SecurityModule
+from config.schema import SchemaConfig, SchemaProfile, ModuleRef
 from config.operations import (
     CapabilitiesOperation,
     GetOperation,
     SetOperation,
     SubscribeOperation,
     ChangeType,
+    Change,
 )
 from config.selectors import PathSelector
 from config.delivery import DeliveryMode
 from config.protocol_options import BaseProtocolOptions, GnmiOptions, GNMIOptions
+from core.schema_manager import SchemaManager
+from core.schema_errors import SchemaError, SchemaValidationError, InvalidSchemaPathError
 
 NANOSECOND = 1000000000
 
@@ -79,6 +83,9 @@ class GNMIClient(BaseClient):
         self.security_module = security_module
         self.encoding = kwargs.get('encoding', "json_ietf")
         self.debug = kwargs.get('debug', False)
+        schema_cfg = kwargs.get('schema_config') or kwargs.get('schema')
+        self.schema_config = schema_cfg if isinstance(schema_cfg, SchemaConfig) else SchemaConfig()
+        self.schema_profile: Optional[SchemaProfile] = None
 
         self.encoding_map = {
             'json': gnmi_pb2.JSON if gnmi_pb2 else 0,
@@ -116,7 +123,27 @@ class GNMIClient(BaseClient):
 
     def execute_capabilities(self, operation: CapabilitiesOperation) -> gnmi_pb2.CapabilityResponse:
         """Executes Capabilities RPC adhering to CapabilitiesOperation."""
-        return self.capability()
+        res = self.capability()
+        if self.schema_config and self.schema_config.auto_discovery and hasattr(res, 'supported_models') and res.supported_models:
+            try:
+                sm = SchemaManager(global_cache_dir=self.schema_config.cache_dir)
+                profile = sm.catalog.build_profile_from_gnmi_models(res.supported_models, strict=False)
+                pid = (
+                    getattr(self.schema_config, 'device_profile', None)
+                    or getattr(self.schema_config, 'profile', None)
+                    or f"gnmi_{self.target}"
+                )
+                if pid:
+                    object.__setattr__(profile, "content_id", pid)
+                sm.db.save_profile(profile)
+                try:
+                    sm.db.bind_device(device_key=self.target, protocol="gnmi", profile_id=profile.profile_id)
+                except Exception:
+                    pass
+                self.schema_profile = profile
+            except Exception as e:
+                logger.debug(f"[GNMIClient] Auto-discovery from capabilities skipped: {e}")
+        return res
 
     def execute_get(self, operation: GetOperation) -> gnmi_pb2.GetResponse:
         """Executes Get RPC adhering to GetOperation."""
@@ -125,6 +152,18 @@ class GNMIClient(BaseClient):
         if isinstance(operation.selector, PathSelector):
             paths = list(operation.selector.paths)
             prefix = operation.selector.prefix
+
+        if self.schema_config and self.schema_config.validate and paths:
+            if self.schema_profile is None:
+                pid = (
+                    getattr(self.schema_config, 'device_profile', None)
+                    or getattr(self.schema_config, 'profile', None)
+                )
+                self.schema_profile = SchemaProfile(content_id=pid)
+            sm = SchemaManager(global_cache_dir=self.schema_config.cache_dir)
+            sm.get_or_create_context(profile=self.schema_profile, search_dirs=self.schema_config.yang_dirs)
+            for p in paths:
+                sm.validate_path(path=p, profile_id=self.schema_profile.profile_id, operation=operation)
 
         enc = self.encoding
         if isinstance(operation.protocol_options, GNMIOptions) and operation.protocol_options.encoding:
@@ -135,11 +174,51 @@ class GNMIClient(BaseClient):
 
     def execute_set(self, operation: SetOperation) -> gnmi_pb2.SetResponse:
         """Executes Set RPC adhering to SetOperation and atomic Change models."""
+        enc = self.encoding
+        if isinstance(operation.protocol_options, GNMIOptions):
+            if operation.protocol_options.encoding:
+                enc = operation.protocol_options.encoding
+
+        if self.schema_config and self.schema_config.validate:
+            if self.schema_profile is None:
+                pid = (
+                    getattr(self.schema_config, 'device_profile', None)
+                    or getattr(self.schema_config, 'profile', None)
+                )
+                self.schema_profile = SchemaProfile(content_id=pid)
+            sm = SchemaManager(global_cache_dir=self.schema_config.cache_dir)
+            sm.get_or_create_context(profile=self.schema_profile, search_dirs=self.schema_config.yang_dirs)
+
+            validated_changes = []
+            for change in operation.changes:
+                sm.validate_path(change.path, profile_id=self.schema_profile.profile_id, operation=operation)
+                if change.value is not None:
+                    sm.validate_payload(change.path, change.value, profile_id=self.schema_profile.profile_id, operation=operation)
+
+                if enc.lower() == 'json_ietf' and change.value is not None and change.operation in (ChangeType.MERGE, ChangeType.REPLACE):
+                    try:
+                        serialized_json = sm.validate_and_serialize_gnmi_change(change, profile_id=self.schema_profile.profile_id)
+                        new_change = Change(
+                            path=change.path,
+                            operation=change.operation,
+                            value=serialized_json,
+                            type="json_ietf",
+                        )
+                        validated_changes.append(new_change)
+                    except Exception as e:
+                        logger.warning(f"[GNMIClient] Serialization error, falling back to original value: {e}")
+                        validated_changes.append(change)
+                else:
+                    validated_changes.append(change)
+            changes_to_process = validated_changes
+        else:
+            changes_to_process = operation.changes
+
         updates = []
         replaces = []
         deletes = []
 
-        for change in operation.changes:
+        for change in changes_to_process:
             change_type = getattr(change, 'type', None)
             if change.operation == ChangeType.MERGE:
                 updates.append((change.path, change.value, change_type))
@@ -149,11 +228,6 @@ class GNMIClient(BaseClient):
                 deletes.append(change.path)
 
         prefix = getattr(operation, 'prefix', '')
-        enc = self.encoding
-        if isinstance(operation.protocol_options, GNMIOptions):
-            if operation.protocol_options.encoding:
-                enc = operation.protocol_options.encoding
-
         return self.set(updates=updates, replaces=replaces, deletes=deletes, prefix=prefix, encoding=enc)
 
     def _build_subscribe_generator(

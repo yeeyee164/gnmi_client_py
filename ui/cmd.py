@@ -27,6 +27,7 @@ from config.model import (
     SessionConfig,
     OutputConfig,
 )
+from config.schema import SchemaConfig
 from config.selectors import (
     Selector,
     PathSelector,
@@ -115,6 +116,49 @@ def resolve_delivery_mode(rpc_mode: Optional[str],
             f"Unsupported subscription mode '{token}'. "
             f"Must be one of {valid} or a delivery mode {[m.value for m in DeliveryMode]}."
         ) from None
+
+
+def _parse_schema_config(data: Any, fallback_dict: Optional[Dict[str, Any]] = None) -> SchemaConfig:
+    """Parses a schema mapping from YAML/dict into a SchemaConfig instance."""
+    schema_map: Dict[str, Any] = {}
+    if fallback_dict and isinstance(fallback_dict, dict):
+        if 'schema' in fallback_dict and isinstance(fallback_dict['schema'], dict):
+            schema_map.update(fallback_dict['schema'])
+        else:
+            for k in (
+                'yang_dirs', 'yang_dir', 'cache_dir', 'yang_cache_dir',
+                'validate', 'enable_schema_validation', 'auto_discovery',
+                'auto_fetch', 'profile', 'device_profile'
+            ):
+                if k in fallback_dict:
+                    schema_map[k] = fallback_dict[k]
+
+    if isinstance(data, dict):
+        if 'schema' in data and isinstance(data['schema'], dict):
+            schema_map.update(data['schema'])
+        else:
+            schema_map.update(data)
+
+    yang_dirs = schema_map.get('yang_dirs', schema_map.get('yang_dir', []))
+    if isinstance(yang_dirs, str):
+        yang_dirs = [yang_dirs]
+    elif not isinstance(yang_dirs, (list, tuple)):
+        yang_dirs = []
+
+    cache_dir = schema_map.get('cache_dir', schema_map.get('yang_cache_dir'))
+    validate = schema_map.get('validate', schema_map.get('enable_schema_validation', False))
+    auto_discovery = schema_map.get('auto_discovery', True)
+    auto_fetch = schema_map.get('auto_fetch', True)
+    profile = schema_map.get('profile', schema_map.get('device_profile'))
+
+    return SchemaConfig(
+        yang_dirs=tuple(yang_dirs),
+        cache_dir=cache_dir,
+        validate=bool(validate),
+        auto_discovery=bool(auto_discovery),
+        auto_fetch=bool(auto_fetch),
+        profile=profile,
+    )
 
 # =====================================================================
 # Root config data class per incoming config
@@ -497,11 +541,30 @@ class CLIConfigBuilder(ConfigBuilder):
             else:
                 raise ValueError(f"Unknown protocol: {protocol}")
 
+            yang_dirs = getattr(self.args, 'yang_dir', None) or []
+            if isinstance(yang_dirs, str):
+                yang_dirs = [yang_dirs]
+            yang_cache_dir = getattr(self.args, 'yang_cache_dir', None) or None
+            validate_schema = getattr(self.args, 'validate_schema', False)
+            auto_discovery = not getattr(self.args, 'no_auto_discovery', False)
+            auto_fetch = not getattr(self.args, 'no_auto_fetch', False)
+            schema_profile = getattr(self.args, 'schema_profile', None) or None
+
+            schema_cfg = SchemaConfig(
+                yang_dirs=tuple(yang_dirs),
+                cache_dir=yang_cache_dir,
+                validate=bool(validate_schema),
+                auto_discovery=bool(auto_discovery),
+                auto_fetch=bool(auto_fetch),
+                profile=schema_profile,
+            )
+
             session = SessionConfig(
                 connection=conn,
                 protocol=proto_enum,
                 operation=op_obj,
-                execution=exec_cfg
+                execution=exec_cfg,
+                schema=schema_cfg,
             )
             sessions.append(session)
 
@@ -812,7 +875,14 @@ class FileConfigBuilder(ConfigBuilder):
             tls_version=global_sec_cfg.get('tls_version', '')
         )
         debug = global_cfg.get('debug', False)
-        
+        fallback_global = dict(d)
+        if isinstance(global_cfg, dict):
+            fallback_global.update(global_cfg)
+        global_schema = _parse_schema_config(
+            d.get('schema') or (global_cfg.get('schema') if isinstance(global_cfg, dict) else None),
+            fallback_dict=fallback_global
+        )
+
         targets = d.get('targets', {})
         if not isinstance(targets, dict):
             targets = {}
@@ -829,6 +899,7 @@ class FileConfigBuilder(ConfigBuilder):
             t_protocol = tgt_info.get('protocol', global_protocol) or 'gnmi'
             t_insecure = tgt_info.get('insecure', global_insecure)
             proto_enum = Protocol.GNMI if t_protocol.lower() == 'gnmi' else Protocol.NETCONF
+            t_schema = _parse_schema_config(tgt_info.get('schema'), fallback_dict=tgt_info) if ('schema' in tgt_info or any(k in tgt_info for k in ('yang_dirs', 'yang_dir', 'validate', 'enable_schema_validation'))) else global_schema
 
             conn = ConnectionConfig(
                 target=str(target_ip_port),
@@ -855,7 +926,8 @@ class FileConfigBuilder(ConfigBuilder):
                     connection=conn,
                     protocol=proto_enum,
                     operations=parsed_ops,
-                    execution=exec_cfg
+                    execution=exec_cfg,
+                    schema=t_schema,
                 )
                 sessions.append(session)
                 continue
@@ -919,7 +991,8 @@ class FileConfigBuilder(ConfigBuilder):
                     connection=conn,
                     protocol=proto_enum,
                     operation=op_obj,
-                    execution=ExecutionConfig(times=t_times)
+                    execution=ExecutionConfig(times=t_times),
+                    schema=t_schema,
                 )
                 sessions.append(session)
             elif is_get_schema:
@@ -933,7 +1006,8 @@ class FileConfigBuilder(ConfigBuilder):
                     connection=conn,
                     protocol=proto_enum,
                     operation=op_obj,
-                    execution=ExecutionConfig(times=t_times)
+                    execution=ExecutionConfig(times=t_times),
+                    schema=t_schema,
                 )
                 sessions.append(session)
             elif is_subscribe: # Subscribe
@@ -979,7 +1053,8 @@ class FileConfigBuilder(ConfigBuilder):
                         connection=conn,
                         protocol=proto_enum,
                         operation=op_obj,
-                        execution=ExecutionConfig(times=t_times)
+                        execution=ExecutionConfig(times=t_times),
+                        schema=t_schema,
                     )
                     sessions.append(session)
             elif is_get: # Get / Get-Config
@@ -1009,7 +1084,8 @@ class FileConfigBuilder(ConfigBuilder):
                     connection=conn,
                     protocol=proto_enum,
                     operation=op_obj,
-                    execution=ExecutionConfig(times=t_times)
+                    execution=ExecutionConfig(times=t_times),
+                    schema=t_schema,
                 )
                 sessions.append(session)
             else: # Set / Edit-Config
@@ -1125,7 +1201,8 @@ class FileConfigBuilder(ConfigBuilder):
                     connection=conn,
                     protocol=proto_enum,
                     operation=op_obj,
-                    execution=ExecutionConfig(times=t_times)
+                    execution=ExecutionConfig(times=t_times),
+                    schema=t_schema,
                 )
                 sessions.append(session)
 
@@ -1154,6 +1231,25 @@ class FileConfigBuilder(ConfigBuilder):
             syslog_server=d.get('syslog_server', ''),
             log_file=d.get('log_file', ''),
         )
+
+def add_schema_args(p: Any, is_child: bool = False) -> None:
+    """Adds YANG schema management CLI options to a parser or subparser."""
+    d_list = argparse.SUPPRESS if is_child else []
+    d_bool = argparse.SUPPRESS if is_child else False
+    d_str = argparse.SUPPRESS if is_child else ""
+
+    p.add_argument('--yang-dir', action='append', default=d_list,
+                   help="Directory containing offline YANG models (can be specified multiple times)")
+    p.add_argument('--yang-cache-dir', default=d_str,
+                   help="Directory for storing cached/downloaded YANG models")
+    p.add_argument('--validate-schema', dest='validate_schema', action='store_true', default=d_bool,
+                   help="Enable strict YANG schema validation")
+    p.add_argument('--no-auto-discovery', dest='no_auto_discovery', action='store_true', default=d_bool,
+                   help="Disable dynamic YANG schema/capability discovery")
+    p.add_argument('--no-auto-fetch', dest='no_auto_fetch', action='store_true', default=d_bool,
+                   help="Disable automatic YANG schema fetching via protocol")
+    p.add_argument('--schema-profile', dest='schema_profile', default=d_str,
+                   help="Schema profile fingerprint or identifier")
 
 def build_args(args=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="gNMI / NETCONF Client")
@@ -1191,6 +1287,8 @@ def build_args(args=None) -> argparse.Namespace:
     parser.add_argument('--syslog-server', default='', help="IP:PORT of Syslog server")
     parser.add_argument('--log-file', default='', help="Path to save local logs")
 
+    add_schema_args(parser, is_child=False)
+
     proto_parser = parser.add_subparsers(dest='protocol', help="select NB protcol")
 
     # add NETCONF parser
@@ -1203,6 +1301,7 @@ def build_args(args=None) -> argparse.Namespace:
 
 def netconf_args(parser):
     parser_nc = parser.add_parser('netconf', help='NETwork CONFiguration') 
+    add_schema_args(parser_nc, is_child=True)
 
     parser_nc.add_argument('--device', default='default', help="Name of vendor-specific device")
     # config file for NETCONF
@@ -1212,15 +1311,18 @@ def netconf_args(parser):
 
     # <hello>
     parser_cap = subparsers.add_parser('capability', help="Fetch NETCONF Server Capabilities")
+    add_schema_args(parser_cap, is_child=True)
 
     # <get>
     parser_get = subparsers.add_parser('get', help="NETCONF <get>")
+    add_schema_args(parser_get, is_child=True)
     parser_get.add_argument('--filter', default='',
                             help="XML filter string or path to file. If given path not exists, consider it as a 'XML' formatted request")
     parser_get.add_argument('--nc-xpath', action='append', help="List of selected NETCONF XPaths")
 
     # <get-config>
     parser_get_config = subparsers.add_parser('get-config', help="NETCONF <get-config>")
+    add_schema_args(parser_get_config, is_child=True)
     parser_get_config.add_argument('--source', default='', help="specify one of 'running', 'candidate', 'startup' if you want to request <get-config> or do not present for <get>")
     parser_get_config.add_argument('--filter', default='',
                             help="XML filter string or path to file. If given path not exists, consider it as a 'XML' formatted request")
@@ -1228,6 +1330,7 @@ def netconf_args(parser):
 
     # <get-schema>
     parser_get_schema = subparsers.add_parser('get-schema', help="NETCONF <get-schema>")
+    add_schema_args(parser_get_schema, is_child=True)
     parser_get_schema.add_argument('--identifier', default='',
                                    help="Identifier for the schema list entry.", required=True)
     parser_get_schema.add_argument('--version', help="Version of the schema requested")
@@ -1235,6 +1338,7 @@ def netconf_args(parser):
 
     # <edit-config>
     parser_set = subparsers.add_parser('edit-config', aliases=['set'], help="NETCONF <edit-config>")
+    add_schema_args(parser_set, is_child=True)
     parser_set.add_argument('--target-datastore', '--target', dest='target_datastore', default='candidate',
                             choices=['candidate', 'running', 'startup'], help="Target datastore (default: candidate)")
     parser_set.add_argument('-C', '--config', '--nc-config', dest='nc_config', required=True,
@@ -1262,6 +1366,7 @@ def netconf_args(parser):
 
     # <commit>
     parser_commit = subparsers.add_parser('commit', help="NETCONF <commit>")
+    add_schema_args(parser_commit, is_child=True)
     parser_commit.add_argument('--confirmed', action='store_true', default=False,
                                help="Request confirmed commit")
     parser_commit.add_argument('--confirm-timeout', dest='confirm_timeout', type=int, default=None,
@@ -1273,15 +1378,18 @@ def netconf_args(parser):
 
     # <cancel-commit>
     parser_cancel_commit = subparsers.add_parser('cancel-commit', aliases=['cancel_commit'], help="NETCONF <cancel-commit>")
+    add_schema_args(parser_cancel_commit, is_child=True)
     parser_cancel_commit.add_argument('--persist-id', dest='persist_id', default="",
                                       help="Cancel confirmed commit using persist-id token")
 
     # <discard-changes>
     parser_discard = subparsers.add_parser('discard-changes', aliases=['discard_changes'], help="NETCONF <discard-changes>")
+    add_schema_args(parser_discard, is_child=True)
 
 
 def gnmi_args(parser):
     parser_gnmi = parser.add_parser('gnmi', help='gRPC Network Management Interfaces') 
+    add_schema_args(parser_gnmi, is_child=True)
 
     # config file for gNMI
     parser_gnmi.add_argument('-c', '--config', default='', help='Path to YAML configuration file for gNMI RPCs')
@@ -1294,15 +1402,18 @@ def gnmi_args(parser):
 
     # UNARY: Capabilities
     parser_cap = subparsers.add_parser('capability', help='execute CAPABILITIES RPC')
+    add_schema_args(parser_cap, is_child=True)
     
     # UNARY: Get
     parser_get = subparsers.add_parser('get', help='execute GET RPC')
+    add_schema_args(parser_get, is_child=True)
     parser_get.add_argument('--type', choices=['config', 'state', 'operational', ''], default='', help="The type of data that is requested from the target. An empty value will grab all kinds of data")
     parser_get.add_argument('--path', action='append', help="List of gNMI Paths")
     parser_get.add_argument('--prefix', default='', help="common prefix for all given paths")
 
     # UNARY: Set
     parser_set = subparsers.add_parser('set', help='execute SET RPC')
+    add_schema_args(parser_set, is_child=True)
     parser_set.add_argument('--prefix', default='', help="common prefix for all given paths")
     parser_set.add_argument('--update', action='append', help='Update path and value (format: PATH:::VALUE or PATH:::@file)')
     parser_set.add_argument('--update-path', action=PairedAction, group_type='update', kind='path',
@@ -1325,6 +1436,7 @@ def gnmi_args(parser):
 
     # Subscribe operation
     parser_sub = subparsers.add_parser('subscribe', help="specify mode for STREAM mode of Subscribe RPC")
+    add_schema_args(parser_sub, is_child=True)
 
     parser_sub.add_argument('--path', action='append', help="List of gNMI Paths")
     parser_sub.add_argument('--prefix', default='', help="common prefix for all given paths")

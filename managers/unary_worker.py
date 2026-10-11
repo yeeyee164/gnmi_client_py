@@ -59,6 +59,7 @@ class BaseUnaryWorker:
                     self.operations = (self.operation,)
                 elif self.operations and not self.operation:
                     self.operation = self.operations[0]
+                self.schema = getattr(config, 'schema', None)
                 self.kwargs = dict(kwargs)
 
 
@@ -105,6 +106,8 @@ class BaseUnaryWorker:
             client_kwargs.pop(k, None)
         if hasattr(self, 'insecure'):
             client_kwargs.setdefault('insecure', self.insecure)
+        if hasattr(self, 'schema') and self.schema:
+            client_kwargs.setdefault('schema_config', self.schema)
         return ClientFactory.get_client(
             protocol=self.protocol, target=self.target, 
             username=self.username, password=self.password,

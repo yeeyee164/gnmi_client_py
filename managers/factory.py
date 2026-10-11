@@ -10,6 +10,7 @@ Currently supported common interfaces:
 """
 from specs.gnmi_client import GNMIClient
 from specs.netconf_client import NetconfClient
+from specs.netconf_validator import NetconfValidator
 from modules.validate import GNMIValidator
 from modules.security import SecurityModule
 
@@ -33,15 +34,24 @@ class ClientFactory:
         """
         security_module = SecurityModule(security) if security else None
         protocol = protocol.lower()
-        
+
+        kwargs = dict(kwargs)
+        schema_cfg = kwargs.pop('schema_config', None) or kwargs.pop('schema', None)
+        insecure = kwargs.pop('insecure', False)
+        device = kwargs.pop('device', 'default')
+
         if protocol == "gnmi":
             return GNMIClient(target, username, password,
                               security_module,
-                              insecure=kwargs.get('insecure', False))
+                              insecure=insecure,
+                              schema_config=schema_cfg,
+                              **kwargs)
         elif protocol == "netconf":
             return NetconfClient(target, username, password,
-                                security_module,
-                                device=kwargs.get('device', 'default'))
+                                 security_module,
+                                 device=device,
+                                 schema_config=schema_cfg,
+                                 **kwargs)
         elif protocol == "restconf":
             raise NotImplementedError("RESTCONF client support is coming soon!")
         else:
@@ -58,8 +68,10 @@ class ValidatorFactory:
 
         if protocol == 'gnmi':
             return GNMIValidator()
-        elif protocol in ('netconf', 'restconf'):
-            # Offline validation for NETCONF will be introduced in Phase 4 (libyang)
+        elif protocol == 'netconf':
+            return NetconfValidator()
+        elif protocol == 'restconf':
+            # Offline validation for RESTCONF will be introduced later
             return None
         else:
             raise ValueError(f"Not supported protocol: {protocol}")

@@ -37,6 +37,14 @@ from config.protocol_options import (
     GnmiSubscriptionMode,
     NetconfOptions,
 )
+from config.schema import (
+    SchemaConfig,
+    SchemaProfile,
+    ModuleRef,
+    SubmoduleRef,
+    FeatureRef,
+    DeviationRef,
+)
 
 __all__ = [
     "Protocol",
@@ -65,4 +73,10 @@ __all__ = [
     "GnmiEncoding",
     "GnmiSubscriptionMode",
     "NetconfOptions",
+    "SchemaConfig",
+    "SchemaProfile",
+    "ModuleRef",
+    "SubmoduleRef",
+    "FeatureRef",
+    "DeviationRef",
 ]

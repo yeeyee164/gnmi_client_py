@@ -8,6 +8,12 @@ from specs.base_client import (
     BaseClient,
     UnsupportedOperationError,
 )
+from specs.base_validator import (
+    BaseValidator,
+    PathValidationError,
+)
+from specs.gnmi_validator import GNMIValidator
+from specs.netconf_validator import NetconfValidator
 
 __all__ = [
     "StreamCommandType",
@@ -16,4 +22,8 @@ __all__ = [
     "StreamEvent",
     "BaseClient",
     "UnsupportedOperationError",
+    "BaseValidator",
+    "PathValidationError",
+    "GNMIValidator",
+    "NetconfValidator",
 ]
