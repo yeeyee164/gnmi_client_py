@@ -143,18 +143,73 @@ class SchemaDB:
     ) -> Path:
         """
         Atomically saves module content to the cache directory and indexes it in SQLite.
-        Follows Section 12.2 atomic caching rules.
+        Follows Section 12.2 atomic caching rules described in `yang_schema_architecture.md`.
         """
         sha = self.calculate_sha256(content)
         rev_str = revision.strip() if revision else ""
         file_suffix = f"@{rev_str}.yang" if rev_str else ".yang"
-        target_filename = f"{name}{file_suffix}"
-        target_path = self.models_dir / target_filename
+        standard_filename = f"{name}{file_suffix}"
+        standard_path = self.models_dir / standard_filename
+
+        # If standard file already exists on disk with a DIFFERENT sha, disambiguate with sha prefix
+        if standard_path.exists():
+            try:
+                with open(standard_path, "rb") as f:
+                    existing_sha = hashlib.sha256(f.read()).hexdigest()
+            except OSError:
+                existing_sha = None
+            if existing_sha and existing_sha != sha:
+                # Content collision for same module name/revision: use content-addressed filename
+                target_filename = f"{name}@{rev_str}_{sha[:8]}.yang" if rev_str else f"{name}_{sha[:8]}.yang"
+                target_path = self.models_dir / target_filename
+            else:
+                target_filename = standard_filename
+                target_path = standard_path
+        else:
+            target_filename = standard_filename
+            target_path = standard_path
 
         is_submodule = bool(re.search(r'^\s*submodule\s+', content, re.MULTILINE))
         if is_submodule:
             kind = "submodule"
             verify_with_libyang = False
+
+        # If file already exists with exact same checksum, avoid redundant re-write
+        if target_path.exists():
+            try:
+                with open(target_path, "rb") as f:
+                    if hashlib.sha256(f.read()).hexdigest() == sha:
+                        # Existing file is intact; update DB record and return
+                        with self._lock:
+                            now_str = datetime.now(timezone.utc).isoformat()
+                            cursor = self._conn.cursor()
+                            cursor.execute(
+                                """
+                                INSERT INTO schema_modules (
+                                    name, revision, namespace, kind, sha256, file_path, source, source_uri, created_at
+                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                ON CONFLICT(name, revision, sha256) DO UPDATE SET
+                                    file_path = excluded.file_path,
+                                    namespace = coalesce(excluded.namespace, schema_modules.namespace),
+                                    source = excluded.source,
+                                    source_uri = excluded.source_uri
+                                """,
+                                (
+                                    name,
+                                    rev_str or None,
+                                    namespace,
+                                    kind,
+                                    sha,
+                                    str(target_path),
+                                    source,
+                                    source_uri,
+                                    now_str,
+                                ),
+                            )
+                            self._conn.commit()
+                            return target_path
+            except OSError:
+                pass
 
         # Step 1: Write to temporary file
         temp_file = None

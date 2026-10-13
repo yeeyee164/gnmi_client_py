@@ -6,9 +6,12 @@ Thread-safe Singleton facade orchestrating schema contexts, metadata database,
 model catalog, dependency resolution, validation, and wire serialization.
 """
 from __future__ import annotations
+import logging
 import threading
 from pathlib import Path
 from typing import Optional, Union, Sequence, Dict, Any, Callable
+
+logger = logging.getLogger(__name__)
 
 from config.schema import SchemaProfile, ModuleRef
 from config.operations import Change, OperationConfig
@@ -40,6 +43,11 @@ class SchemaManager:
     def __init__(self, global_cache_dir: Optional[Union[str, Path]] = None):
         with self._lock:
             if getattr(self, "_initialized", False):
+                if global_cache_dir is not None:
+                    target_dir = Path(global_cache_dir).expanduser().resolve()
+                    # targeted directory has changed: reinitialize SchemaManager class
+                    if self.db.cache_dir != target_dir:
+                        self.initialize(global_cache_dir)
                 return
             self.db = SchemaDB(cache_dir=global_cache_dir)
             self.registry = ContextRegistry()
@@ -62,39 +70,64 @@ class SchemaManager:
             cls._instance = None
 
     def initialize(self, global_cache_dir: Optional[Union[str, Path]] = None) -> None:
-        """Initializes or switches global cache directory and database."""
+        """Initializes or safely reconfigures global cache directory and database."""
         with self._lock:
             if global_cache_dir is not None:
-                self.db.close()
-                self.db = SchemaDB(cache_dir=global_cache_dir)
-                self.resolver = SchemaResolver(schema_db=self.db)
+                new_cache = Path(global_cache_dir).expanduser().resolve()
+                if not getattr(self, "_initialized", False) or self.db.cache_dir != new_cache:
+                    if hasattr(self, "db"):
+                        try:
+                            self.db.close()
+                        except Exception:
+                            pass
+                    if hasattr(self, "registry"):
+                        self.registry.clear()
+                    else:
+                        self.registry = ContextRegistry()
+                    self.db = SchemaDB(cache_dir=new_cache)
+                    self.resolver = SchemaResolver(schema_db=self.db)
+                    if not hasattr(self, "catalog"):
+                        self.catalog = ModelCatalog()
+                    if not hasattr(self, "validator"):
+                        self.validator = SchemaValidator()
+                    if not hasattr(self, "serializer"):
+                        self.serializer = SchemaSerializer()
+                    self._initialized = True
 
     def get_or_create_context(
         self,
         profile: Union[str, SchemaProfile],
         search_dirs: Sequence[Union[str, Path]] = (),
+        strict: bool = False,
     ) -> SchemaContext:
         """
         Retrieves or instantiates an isolated SchemaContext for the target profile.
+        When strict=True, missing profile modules will raise SchemaNotFoundError.
         """
         profile_id = profile if isinstance(profile, str) else profile.profile_id
+        profile_obj = profile if isinstance(profile, SchemaProfile) else None
         with self._lock:
             sctx = self.registry.get_or_create_context(
                 profile_id=profile_id,
                 search_dirs=search_dirs,
+                profile=profile_obj,
             )
             # If profile object passed, persist it in DB and ensure its modules
-            if isinstance(profile, SchemaProfile):
-                self.db.save_profile(profile)
-                if profile.modules:
+            if profile_obj is not None:
+                self.db.save_profile(profile_obj)
+                if profile_obj.modules:
                     try:
                         self.resolver.ensure_profile(
                             context=sctx,
-                            profile=profile,
+                            profile=profile_obj,
                             search_dirs=search_dirs,
                         )
-                    except SchemaNotFoundError:
-                        pass
+                    except SchemaNotFoundError as err:
+                        if strict:
+                            raise
+                        logger.warning(
+                            f"[SchemaManager] Schema module not found during profile loading: {err}"
+                        )
             return sctx
 
     def load_module_file(

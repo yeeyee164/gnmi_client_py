@@ -161,7 +161,11 @@ class GNMIClient(BaseClient):
                 )
                 self.schema_profile = SchemaProfile(content_id=pid)
             sm = SchemaManager(global_cache_dir=self.schema_config.cache_dir)
-            sm.get_or_create_context(profile=self.schema_profile, search_dirs=self.schema_config.yang_dirs)
+            sm.get_or_create_context(
+                profile=self.schema_profile,
+                search_dirs=self.schema_config.yang_dirs,
+                strict=True,
+            )
             for p in paths:
                 sm.validate_path(path=p, profile_id=self.schema_profile.profile_id, operation=operation)
 
@@ -187,7 +191,11 @@ class GNMIClient(BaseClient):
                 )
                 self.schema_profile = SchemaProfile(content_id=pid)
             sm = SchemaManager(global_cache_dir=self.schema_config.cache_dir)
-            sm.get_or_create_context(profile=self.schema_profile, search_dirs=self.schema_config.yang_dirs)
+            sm.get_or_create_context(
+                profile=self.schema_profile,
+                search_dirs=self.schema_config.yang_dirs,
+                strict=True,
+            )
 
             validated_changes = []
             for change in operation.changes:

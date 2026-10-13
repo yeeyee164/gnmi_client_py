@@ -64,7 +64,7 @@ def test_serializer_netconf_edit_config_metadata(schema_context):
 
     xml_edit = serializer.serialize_netconf_edit_config(schema_context, changes)
     assert "nc:operation=\"replace\"" in xml_edit
-    assert "<hostname>router-02</hostname>" in xml_edit
+    assert 'hostname nc:operation="replace">router-02</hostname>' in xml_edit
 
 
 def test_serializer_gnmi_update(schema_context):

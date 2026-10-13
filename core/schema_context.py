@@ -82,6 +82,9 @@ class SchemaContext:
                         pass
 
 
+from core.schema_errors import SchemaError, SchemaProfileConflictError
+
+
 class ContextRegistry:
     """
     Thread-safe registry managing isolated SchemaContext instances keyed by profile_id.
@@ -90,20 +93,34 @@ class ContextRegistry:
     def __init__(self):
         self._lock = threading.RLock()
         self._contexts: Dict[str, SchemaContext] = {}
+        self._profiles: Dict[str, Any] = {}
 
     def get_or_create_context(
         self,
         profile_id: str,
         search_dirs: Sequence[Union[str, Path]] = (),
+        profile: Optional[Any] = None,
     ) -> SchemaContext:
         """
         Retrieves an existing SchemaContext for profile_id, or initializes a new one.
+        Rejects conflicting schema profile definitions for the same profile_id.
         """
         if libyang is None:
             raise SchemaError("libyang package is required for schema management but is not installed.")
 
         with self._lock:
             norm_dirs = tuple(Path(d).expanduser().resolve() for d in search_dirs)
+
+            if profile is not None and hasattr(profile, "to_canonical_json"):
+                if profile_id in self._profiles:
+                    existing_p = self._profiles[profile_id]
+                    if hasattr(existing_p, "to_canonical_json"):
+                        if profile.to_canonical_json() != existing_p.to_canonical_json():
+                            raise SchemaProfileConflictError(
+                                f"Conflicting SchemaProfile definitions encountered for profile_id '{profile_id}'."
+                            )
+                else:
+                    self._profiles[profile_id] = profile
 
             if profile_id in self._contexts:
                 sctx = self._contexts[profile_id]
@@ -134,3 +151,4 @@ class ContextRegistry:
     def clear(self) -> None:
         with self._lock:
             self._contexts.clear()
+            self._profiles.clear()

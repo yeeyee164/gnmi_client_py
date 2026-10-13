@@ -243,7 +243,11 @@ class NetconfClient(BaseClient):
                     )
                     self.schema_profile = SchemaProfile(content_id=pid)
             sm = SchemaManager(global_cache_dir=self.schema_config.cache_dir)
-            sm.get_or_create_context(profile=self.schema_profile, search_dirs=self.schema_config.yang_dirs)
+            sm.get_or_create_context(
+                profile=self.schema_profile,
+                search_dirs=self.schema_config.yang_dirs,
+                strict=True,
+            )
             for p in paths:
                 sm.validate_path(path=p, profile_id=self.schema_profile.profile_id, operation=operation)
 
@@ -321,7 +325,11 @@ class NetconfClient(BaseClient):
                     self.schema_profile = SchemaProfile(content_id=pid)
 
             sm = SchemaManager(global_cache_dir=self.schema_config.cache_dir)
-            sctx = sm.get_or_create_context(profile=self.schema_profile, search_dirs=self.schema_config.yang_dirs)
+            sctx = sm.get_or_create_context(
+                profile=self.schema_profile,
+                search_dirs=self.schema_config.yang_dirs,
+                strict=True,
+            )
 
             fetch_cb = (
                 (lambda name, rev: self._extract_schema_content(self.get_schema(name, rev)))
@@ -340,8 +348,10 @@ class NetconfClient(BaseClient):
                                 search_dirs=self.schema_config.yang_dirs,
                                 fetch_callback=fetch_cb,
                             )
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logger.warning(
+                                f"Failed to ensure module '{m.name}' via fetch callback: {exc}"
+                            )
 
                 raw_config = sm.validate_and_serialize_netconf_edit(
                     changes=operation.changes,

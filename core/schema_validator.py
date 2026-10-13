@@ -117,10 +117,16 @@ class SchemaValidator:
 
         # Test building data path in libyang
         try:
-            val_str = str(value) if not isinstance(value, (dict, list)) else None
-            if val_str is not None:
-                schema_context.create_data_path(data_path, value=val_str)
+            if isinstance(value, (dict, list)):
+                from core.schema_data import DataBuilder
+                DataBuilder.populate_tree(schema_context, data_path, value)
+            else:
+                val_str = str(value).lower() if isinstance(value, bool) else (str(value) if value is not None else None)
+                if val_str is not None:
+                    schema_context.create_data_path(data_path, value=val_str)
         except Exception as e:
+            if isinstance(e, SchemaValidationError):
+                raise
             raise SchemaValidationError(
                 f"Payload validation failed at path '{path_str}' for value '{value}': {e}"
             ) from e
