@@ -73,6 +73,13 @@ class SchemaContext:
             d_path = Path(directory).expanduser().resolve()
             if d_path not in self.search_dirs:
                 self.search_dirs = self.search_dirs + (d_path,)
+                if hasattr(self.yang, 'cdata') and self.yang.cdata is not None and libyang is not None:
+                    try:
+                        from _libyang import lib
+                        from libyang.util import str2c
+                        lib.ly_ctx_set_searchdir(self.yang.cdata, str2c(str(d_path)))
+                    except Exception:
+                        pass
 
 
 class ContextRegistry:

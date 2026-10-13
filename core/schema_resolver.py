@@ -128,15 +128,24 @@ class SchemaResolver:
             return
         visited.add(key)
 
-        # 1. Active Context Check
-        if context.has_module(module_name, revision):
-            logger.debug(f"[Resolver] Module '{module_name}' ({revision}) already loaded in context.")
-            return
-
         norm_search_dirs = [Path(d).expanduser().resolve() for d in search_dirs]
         for d in context.search_dirs:
             if d not in norm_search_dirs:
                 norm_search_dirs.append(d)
+
+        # 1. Active Context Check
+        if context.has_module(module_name, revision):
+            # Also ensure file is present in search path if on disk
+            existing_p = self._find_module_file(module_name, revision, norm_search_dirs)
+            if existing_p is None:
+                existing_p = self.schema_db.find_module(name=module_name, revision=revision)
+            if existing_p is not None:
+                context.add_search_dir(existing_p.parent)
+                logger.debug(f"[Resolver] Module '{module_name}' ({revision}) already loaded in context.")
+                return
+            if fetch_callback is None:
+                logger.debug(f"[Resolver] Module '{module_name}' ({revision}) already loaded in context.")
+                return
 
         module_path: Optional[Path] = None
 
@@ -153,10 +162,12 @@ class SchemaResolver:
             fetched_content = fetch_callback(module_name, revision)
             if fetched_content:
                 # Save to cache DB atomically (without strict libyang validation because dependencies not yet present)
+                is_sub = bool(re.search(r'^\s*submodule\s+', fetched_content, re.MULTILINE))
                 module_path = self.schema_db.store_module_content(
                     name=module_name,
                     content=fetched_content,
                     revision=revision,
+                    kind="submodule" if is_sub else "module",
                     source="protocol_discovery",
                     verify_with_libyang=False,
                 )
@@ -167,11 +178,15 @@ class SchemaResolver:
                 f"Searched dirs: {[str(d) for d in norm_search_dirs]}, Cache: {self.schema_db.models_dir}"
             )
 
+        context.add_search_dir(module_path.parent)
+
         # Read content and inspect dependencies before parsing into context
         try:
             content = module_path.read_text(encoding="utf-8")
         except OSError as e:
             raise SchemaNotFoundError(f"Failed to read YANG file '{module_path}': {e}") from e
+
+        is_submodule = bool(re.search(r'^\s*submodule\s+', content, re.MULTILINE))
 
         deps = self.extract_dependencies(content)
         for dep_name, dep_rev, dep_kind in deps:
@@ -190,14 +205,17 @@ class SchemaResolver:
                     f"'{dep_name}' ({dep_rev or 'any'}): {err}"
                 ) from err
 
-        # Load file into context
-        try:
-            context.parse_module_file(module_path)
-            logger.debug(f"[Resolver] Successfully parsed '{module_name}' into context.")
-        except Exception as e:
-            # If already loaded in context, ignore duplicate load
-            if not context.has_module(module_name, revision):
-                raise SchemaDependencyError(f"libyang compilation failed for '{module_name}': {e}") from e
+        # Load file into context (submodules are included via parent module search path)
+        if not is_submodule:
+            try:
+                context.parse_module_file(module_path)
+                logger.debug(f"[Resolver] Successfully parsed '{module_name}' into context.")
+            except Exception as e:
+                # If already loaded in context, ignore duplicate load
+                if not context.has_module(module_name, revision):
+                    raise SchemaDependencyError(f"libyang compilation failed for '{module_name}': {e}") from e
+        else:
+            logger.debug(f"[Resolver] Submodule '{module_name}' registered in search path for inclusion.")
 
     def ensure_profile(
         self,

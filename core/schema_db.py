@@ -7,13 +7,14 @@ YANG modules, submodules, features, deviations, and schema profiles.
 """
 from __future__ import annotations
 import os
+import re
 import sqlite3
 import hashlib
 import tempfile
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Tuple, Union
+from typing import Optional, List, Dict, Any, Tuple, Union, Sequence
 
 try:
     import libyang
@@ -149,6 +150,11 @@ class SchemaDB:
         file_suffix = f"@{rev_str}.yang" if rev_str else ".yang"
         target_filename = f"{name}{file_suffix}"
         target_path = self.models_dir / target_filename
+
+        is_submodule = bool(re.search(r'^\s*submodule\s+', content, re.MULTILINE))
+        if is_submodule:
+            kind = "submodule"
+            verify_with_libyang = False
 
         # Step 1: Write to temporary file
         temp_file = None
@@ -414,6 +420,94 @@ class SchemaDB:
             )
             row = cursor.fetchone()
             return row["profile_id"] if row else None
+
+    def get_profile_modules(self, profile_id: str) -> List[Dict[str, Any]]:
+        """Returns metadata for all modules linked to a specific profile_id."""
+        with self._lock:
+            cursor = self._conn.cursor()
+            cursor.execute(
+                """
+                SELECT sm.module_id, sm.name, sm.revision, sm.namespace, sm.kind,
+                       sm.sha256, sm.file_path, sm.source, sm.created_at
+                FROM profile_modules pm
+                JOIN schema_modules sm ON pm.module_id = sm.module_id
+                WHERE pm.profile_id = ?
+                ORDER BY sm.name ASC
+                """,
+                (profile_id,),
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+    def get_module_features(self, module_name: str, revision: Optional[str] = None) -> List[str]:
+        """Returns all features associated with a module name and optional revision."""
+        with self._lock:
+            cursor = self._conn.cursor()
+            if revision is not None:
+                cursor.execute(
+                    """
+                    SELECT sf.feature_name
+                    FROM schema_features sf
+                    JOIN schema_modules sm ON sf.module_id = sm.module_id
+                    WHERE sm.name = ? AND sm.revision = ?
+                    ORDER BY sf.feature_name ASC
+                    """,
+                    (module_name, revision),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT sf.feature_name
+                    FROM schema_features sf
+                    JOIN schema_modules sm ON sf.module_id = sm.module_id
+                    WHERE sm.name = ?
+                    ORDER BY sf.feature_name ASC
+                    """,
+                    (module_name,),
+                )
+            return [row["feature_name"] for row in cursor.fetchall()]
+
+    def get_device_binding_info(self, device_key: str) -> Optional[Dict[str, Any]]:
+        """Returns full device binding information for a device key."""
+        with self._lock:
+            cursor = self._conn.cursor()
+            cursor.execute(
+                "SELECT device_key, protocol, profile_id, last_seen FROM device_bindings WHERE device_key=?",
+                (device_key,),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def get_database_statistics(self) -> Dict[str, int]:
+        """Returns aggregate row counts across all SchemaDB SQLite tables."""
+        stats = {}
+        tables = [
+            "schema_modules",
+            "schema_features",
+            "schema_deviations",
+            "schema_profiles",
+            "profile_modules",
+            "profile_datastores",
+            "device_bindings",
+        ]
+        with self._lock:
+            cursor = self._conn.cursor()
+            for tbl in tables:
+                cursor.execute(f"SELECT COUNT(*) FROM {tbl}")
+                stats[tbl] = cursor.fetchone()[0]
+        return stats
+
+    def list_modules(self) -> List[Dict[str, Any]]:
+        """Returns metadata for all cached modules in SQLite."""
+        with self._lock:
+            cursor = self._conn.cursor()
+            cursor.execute(
+                """
+                SELECT module_id, name, revision, namespace, kind, sha256, file_path, source, created_at
+                FROM schema_modules
+                ORDER BY name ASC, revision DESC
+                """
+            )
+            return [dict(row) for row in cursor.fetchall()]
 
     def close(self) -> None:
         with self._lock:

@@ -119,7 +119,33 @@ def resolve_delivery_mode(rpc_mode: Optional[str],
 
 
 def _parse_schema_config(data: Any, fallback_dict: Optional[Dict[str, Any]] = None) -> SchemaConfig:
-    """Parses a schema mapping from YAML/dict into a SchemaConfig instance."""
+    """
+    Parses a schema mapping from YAML/dict into a SchemaConfig instance.
+
+    Args:
+        data: part of parsed YAML data
+        fallback_dict: fallback dictionary in case of `data` is incomplete
+    
+    Returns:
+        `SchemaConfig`
+    
+    Currently supported example of YAML Format
+    ------------------------------------------
+
+    ```yaml
+    schema:
+      enabled: true
+      profile_id: "srlinux"
+      search_dirs:
+        - "./path/to/yang"
+      modules:
+        - "openconfig-interfaces"
+        - name: "openconfig-system"
+          revision: "2025-12-12"
+          features:
+            - "telemetry"
+    ```
+    """
     schema_map: Dict[str, Any] = {}
     if fallback_dict and isinstance(fallback_dict, dict):
         if 'schema' in fallback_dict and isinstance(fallback_dict['schema'], dict):
@@ -298,6 +324,10 @@ def _parse_paired_options(args, group_type: str) -> List[Tuple[str, str]]:
 
 
 class CLIConfigBuilder(ConfigBuilder):
+    """
+    Parsing all command-line arguments via argparse.
+    See '--help' strings to inspect this code.
+    """
 
     def __init__(self, args):
         self.args = args
@@ -594,10 +624,27 @@ class CLIConfigBuilder(ConfigBuilder):
 def parse_operation_item(op_item: Any, protocol: Protocol = Protocol.NETCONF) -> OperationConfig:
     """
     Parses a single operation entry from YAML into a typed OperationConfig.
-    Supports:
-    - Mapping syntax: {"get-schema": {"identifier": "openconfig-interfaces", ...}}
-    - Object syntax: {"operation": "get-schema", "identifier": "openconfig-interfaces", ...}
-    - Direct OperationConfig instances.
+
+    Args:
+        op_item: data of 'operations' key in YAML
+        protocol: currently supported protocol defined at `config/model.py`
+    
+    Raises:
+        FileConfigError: if given operation in `operations` does not support, or invalid data given
+
+    Returns:
+        CapabilitiesOperation: When `operations` contains capability/capabilities operation 
+        GetSchemaOperation: When `operations` contains get-schema(NETCONF) operation 
+        GetOperation: When `operations` contains get operation 
+        GetConfigOperation: When `operations` contains get-config(NETCONF) operation 
+        SetOperation: When `operations` contains set(gNMI) operation 
+        EditConfigOperation: When `operations` contains edit-config(NETCONF) operation 
+        NetconfTransactionOperation: When `operations` contains (un)lock, commit, cancel-commit, discard-changes (NETCONF) opeartion
+
+    Note:
+        - Mapping syntax: {"get-schema": {"identifier": "openconfig-interfaces", ...}}
+        - Object syntax: {"operation": "get-schema", "identifier": "openconfig-interfaces", ...}
+        - Direct OperationConfig instances.
     """
     if isinstance(op_item, OperationConfig):
         return op_item
@@ -840,6 +887,9 @@ def parse_operation_item(op_item: Any, protocol: Protocol = Protocol.NETCONF) ->
 
 
 class FileConfigBuilder(ConfigBuilder):
+    """
+    Parse YAML formatted configure file. It may be protocol-specific.
+    """
     def __init__(self, path, protocol: str = ""):
         self.protocol = protocol
         self.path = path
