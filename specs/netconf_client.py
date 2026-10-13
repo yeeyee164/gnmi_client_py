@@ -31,6 +31,8 @@ from core.schema_errors import SchemaError, SchemaValidationError, InvalidSchema
 
 RPCError = getattr(operations, 'RPCError', Exception) if operations else Exception
 
+RPCError = getattr(operations, 'RPCError', Exception) if operations else Exception
+
 NETCONF_BASE_NS = "urn:ietf:params:xml:ns:netconf:base:1.0"
 NETCONF_NS = {
     'nc': NETCONF_BASE_NS
