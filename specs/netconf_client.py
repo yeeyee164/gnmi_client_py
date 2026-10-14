@@ -1,7 +1,9 @@
 from __future__ import annotations
 import os
+import time
 import logging
 import urllib.parse
+from datetime import datetime, timezone
 from typing import Iterator, Any, Optional
 
 try:
@@ -751,14 +753,189 @@ class NetconfClient(BaseClient):
         except RPCError as e:
             return e
 
-    def subscribe(self, request_iterator: Any) -> Iterator[Any]:
+    def _parse_event_time_to_posix(self, event_time_str: Optional[str]) -> float:
+        """Converts an RFC 3339 / ISO 8601 eventTime string into a POSIX timestamp float."""
+        if not event_time_str:
+            return time.time()
+        try:
+            clean_str = event_time_str.strip().replace('Z', '+00:00')
+            dt = datetime.fromisoformat(clean_str)
+            return dt.timestamp()
+        except Exception:
+            return time.time()
+
+    def _build_subscription_filter(self, selector: Any) -> Optional[tuple[str, str] | str]:
+        """Constructs filter argument suitable for ncclient.create_subscription."""
+        if selector is None:
+            return None
+
+        if isinstance(selector, FilterSelector):
+            content = (selector.expression or "").strip()
+            if not content:
+                return None
+            if getattr(selector, "filter_type", "subtree") == "xpath":
+                return ("xpath", content)
+            return content
+
+        if isinstance(selector, PathSelector):
+            paths = list(selector.paths) if hasattr(selector, "paths") else []
+            if not paths:
+                return None
+            if len(paths) == 1 and not paths[0].strip().startswith("<"):
+                return ("xpath", paths[0].strip())
+            elif any(p.strip().startswith("<") for p in paths):
+                return paths[0].strip()
+            else:
+                return ("xpath", paths[0].strip())
+
+        if isinstance(selector, (list, tuple)):
+            if not selector:
+                return None
+            first = selector[0]
+            if isinstance(first, str):
+                s = first.strip()
+                if s.startswith("<"):
+                    return s
+                return ("xpath", s)
+
+        if isinstance(selector, str):
+            s = selector.strip()
+            if not s:
+                return None
+            if s.startswith("<"):
+                return s
+            return ("xpath", s)
+
+        return None
+
+    def execute_subscribe(
+        self,
+        selectors: Any = None,
+        options: Optional[BaseProtocolOptions] = None,
+        context: Optional[StreamContext] = None,
+        operation: Optional[SubscribeOperation] = None,
+        **kwargs,
+    ) -> Iterator[StreamEvent]:
         """
-        Executes NETCONF Event Notifications (RFC 5277).
+        Executes an RFC 5277 NETCONF event notification subscription.
+        Performs synchronous capability verification before returning generator.
         """
-        self.session.create_subscription()
-        
-        while True:
-            notif = self.session.take_notification(block=True)
-            if notif:
-                yield notif
+        server_caps = list(getattr(self.session, 'server_capabilities', [])) if self.session else []
+        if not self.session or not any("urn:ietf:params:netconf:capability:notification:1.0" in c for c in server_caps):
+            raise UnsupportedOperationError(
+                "NetconfClient does not support subscribe operations: Target NETCONF server does not support RFC 5277 (:notification:1.0)."
+            )
+
+        return self._run_subscribe_generator(
+            selectors=selectors,
+            options=options,
+            context=context,
+            operation=operation,
+            **kwargs,
+        )
+
+    def _run_subscribe_generator(
+        self,
+        selectors: Any = None,
+        options: Optional[BaseProtocolOptions] = None,
+        context: Optional[StreamContext] = None,
+        operation: Optional[SubscribeOperation] = None,
+        **kwargs,
+    ) -> Iterator[StreamEvent]:
+        if context is None:
+            context = StreamContext()
+
+        # 2. Resolve parameters from operation, options, or kwargs
+        opts = options or (operation.protocol_options if operation else None)
+        stream_name = getattr(opts, 'stream_name', 'NETCONF') if opts else 'NETCONF'
+        start_time = getattr(opts, 'start_time', None) if opts else None
+        stop_time = getattr(opts, 'stop_time', None) if opts else None
+        poll_timeout = float(getattr(opts, 'poll_timeout', 1.0) if opts else 1.0)
+
+        if 'stream_name' in kwargs:
+            stream_name = kwargs['stream_name']
+        if 'start_time' in kwargs:
+            start_time = kwargs['start_time']
+        if 'stop_time' in kwargs:
+            stop_time = kwargs['stop_time']
+        if 'poll_timeout' in kwargs:
+            poll_timeout = float(kwargs['poll_timeout'])
+
+        sel = operation.selector if operation else selectors
+        nc_filter = self._build_subscription_filter(sel)
+
+        logger.info(
+            f"[NetconfClient {self.target}] Creating RFC 5277 subscription on stream '{stream_name}'..."
+        )
+
+        # 3. Dispatch <create-subscription> RPC
+        try:
+            sub_kwargs = {
+                'stream_name': stream_name,
+            }
+            if nc_filter is not None:
+                sub_kwargs['filter'] = nc_filter
+            if start_time is not None:
+                sub_kwargs['start_time'] = start_time
+            if stop_time is not None:
+                sub_kwargs['stop_time'] = stop_time
+
+            reply = self.session.create_subscription(**sub_kwargs)
+            if not getattr(reply, 'ok', True):
+                err = getattr(reply, 'error', 'Unknown error')
+                raise RPCError(f"create-subscription failed: {err}")
+        except Exception as e:
+            logger.error(f"[NetconfClient {self.target}] create-subscription error: {e}")
+            yield StreamEvent(protocol="netconf", timestamp=time.time(), raw_payload=None, error=e)
+            return
+
+        # 4. Continuous Notification Consumer Loop
+        while not context.is_cancelled:
+            try:
+                notif = self.session.take_notification(block=True, timeout=poll_timeout)
+                if notif is None:
+                    continue
+
+                raw_xml = getattr(notif, 'notification_xml', '')
+                event_time_str = getattr(notif, 'event_time', None)
+                ts = self._parse_event_time_to_posix(event_time_str)
+
+                # Parse XML to dictionary for structured handlers
+                event_dict = None
+                if raw_xml:
+                    try:
+                        import xmltodict
+                        event_dict = xmltodict.parse(raw_xml)
+                    except Exception as parse_err:
+                        logger.debug(f"[NetconfClient {self.target}] xmltodict parse warning: {parse_err}")
+
+                is_replay_complete = "<replayComplete" in raw_xml
+                is_notif_complete = "<notificationComplete" in raw_xml
+
+                yield StreamEvent(
+                    protocol="netconf",
+                    timestamp=ts,
+                    raw_payload=raw_xml,
+                    data=event_dict,
+                    is_sync_marker=is_replay_complete,
+                )
+
+                # Termination on bounded replay complete
+                if is_notif_complete:
+                    logger.info(
+                        f"[NetconfClient {self.target}] Reached <notificationComplete/>. Stream finished."
+                    )
+                    break
+
+            except Exception as e:
+                if context.is_cancelled:
+                    break
+                logger.error(f"[NetconfClient {self.target}] Error reading notification: {e}")
+                yield StreamEvent(protocol="netconf", timestamp=time.time(), raw_payload=None, error=e)
+                break
+
+    def subscribe(self, *args, **kwargs) -> Iterator[Any]:
+        """Backward-compatible delegation to execute_subscribe."""
+        return self.execute_subscribe(*args, **kwargs)
+
 

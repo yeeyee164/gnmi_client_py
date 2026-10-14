@@ -1,0 +1,24 @@
+protocol: "netconf"
+
+subscriptions:
+  srl_alarms:
+    stream_name: "NETCONF"
+    start_time: "2026-10-14T00:00:00Z"
+    stop_time: "2026-10-14T12:00:00Z"
+    poll_timeout: 1.0
+    filter:
+      type: "xpath"
+      select: "/srl_nokia-interfaces:interfaces"
+
+targets:
+  172.20.20.2:830:
+    username: "admin"
+    password: "NokiaSrl1!"
+    subscriptions:
+      - srl_alarms
+
+outputs:
+  default_output:
+    output-type: stdout
+    format: json
+
