@@ -8,6 +8,7 @@ from config.protocol_options.gnmi import GnmiOptions
 from config.protocol_options.netconf import NetconfOptions
 from config.selectors import Selector, SelectorConfig
 from config.delivery import DeliveryPolicy
+from config.schema import SchemaConfig
 
 class Protocol(str, Enum):
     NONE = "none"
@@ -92,6 +93,7 @@ class SessionConfig:
     operation: Optional[OperationConfig] = None   # primary/legacy operation of `protocol`
     operations: tuple[OperationConfig, ...] = ()  # sequential list of operations
     execution: ExecutionConfig = field(default_factory=ExecutionConfig) 
+    schema: SchemaConfig = field(default_factory=SchemaConfig)
 
     def __post_init__(self):
         if self.operation is not None and not self.operations:
@@ -101,6 +103,11 @@ class SessionConfig:
             object.__setattr__(self, 'operations', ops_tuple)
             if self.operation is None and ops_tuple:
                 object.__setattr__(self, 'operation', ops_tuple[0])
+
+        if self.schema is None:
+            object.__setattr__(self, 'schema', SchemaConfig())
+        elif isinstance(self.schema, dict):
+            object.__setattr__(self, 'schema', SchemaConfig(**self.schema))
 
     @property
     def target(self) -> str:
@@ -204,6 +211,18 @@ class SessionConfig:
         if hasattr(self.operation, 'subscription_name'):
             return self.operation.subscription_name
         return "default"
+
+    @property
+    def yang_dirs(self) -> tuple:
+        return self.schema.yang_dirs
+
+    @property
+    def yang_cache_dir(self):
+        return self.schema.cache_dir
+
+    @property
+    def enable_schema_validation(self) -> bool:
+        return self.schema.validate
 
     def validate(self) -> None:
         """Validate session parameters and underlying operation(s)."""

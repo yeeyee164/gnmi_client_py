@@ -1,6 +1,7 @@
 from __future__ import annotations
 import os
 import logging
+import urllib.parse
 from typing import Iterator, Any, Optional
 
 try:
@@ -12,6 +13,7 @@ except ImportError:
 from specs.base_client import BaseClient, UnsupportedOperationError
 from specs.stream_types import StreamContext, StreamEvent
 from modules.security import SecurityModule
+from config.schema import SchemaConfig, SchemaProfile, ModuleRef
 from config.operations import (
     CapabilitiesOperation,
     GetOperation,
@@ -24,6 +26,10 @@ from config.operations import (
 )
 from config.selectors import PathSelector, FilterSelector
 from config.protocol_options import BaseProtocolOptions, NetconfOptions
+from core.schema_manager import SchemaManager
+from core.schema_errors import SchemaError, SchemaValidationError, InvalidSchemaPathError
+
+RPCError = getattr(operations, 'RPCError', Exception) if operations else Exception
 
 RPCError = getattr(operations, 'RPCError', Exception) if operations else Exception
 
@@ -36,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 class NetconfClient(BaseClient):
     """
-    A "Lite" NETCONF Client utilizing ncclient.
+    A NETCONF Client utilizing ncclient.
     Currently accepts raw XPath strings or XML Subtree for its paths/filters.
     Future versions will utilize libyang to translate standard paths to XML Subtrees.
     """
@@ -48,6 +54,9 @@ class NetconfClient(BaseClient):
         self.security_module = security_module
         self.session = None
         self.device = kwargs.get('device', 'default')
+        schema_cfg = kwargs.get('schema_config') or kwargs.get('schema')
+        self.schema_config = schema_cfg if isinstance(schema_cfg, SchemaConfig) else SchemaConfig()
+        self.schema_profile: Optional[SchemaProfile] = None
 
     def __enter__(self):
         host, port = self.target.split(':')
@@ -67,6 +76,11 @@ class NetconfClient(BaseClient):
                 netconf_info.update(ssh_kwargs)
 
         self.session = manager.connect(**netconf_info)
+        if self.schema_config and self.schema_config.auto_discovery:
+            try:
+                self.discover_schema_profile()
+            except Exception as e:
+                logger.debug(f"[NetconfClient] Discovery during connect skipped: {e}")
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -81,20 +95,127 @@ class NetconfClient(BaseClient):
     # Semantic Intent Operations
     # =========================================================================
 
+    def discover_schema_profile(self) -> SchemaProfile:
+        """
+        Discovers server capabilities and datastores from the active NETCONF session,
+        extracts YANG module references and revisions from capability URIs,
+        constructs a deterministic SchemaProfile, and persists it in SchemaDB.
+        """
+        capabilities = []
+        if self.session and hasattr(self.session, 'server_capabilities'):
+            capabilities = list(self.session.server_capabilities)
+
+        modules = []
+        for cap in capabilities:
+            try:
+                parsed = urllib.parse.urlsplit(cap)
+                if not parsed.query:
+                    continue
+                qs = urllib.parse.parse_qs(parsed.query)
+                mod_name = qs.get('module', [None])[0]
+                if mod_name:
+                    rev = qs.get('revision', [None])[0]
+                    features = tuple(f.strip() for f in qs.get('features', [''])[0].split(',') if f.strip())
+                    deviations = tuple(d.strip() for d in qs.get('deviations', [''])[0].split(',') if d.strip())
+                    ns = (parsed.scheme + '://' + parsed.netloc + parsed.path) if parsed.scheme else parsed.path
+                    modules.append(ModuleRef(name=mod_name, revision=rev, namespace=ns))
+            except Exception as e:
+                logger.debug(f"[NetconfClient] Error parsing capability '{cap}': {e}")
+
+        datastores = ["running"]
+        if any(':candidate' in c for c in capabilities):
+            datastores.append("candidate")
+        if any(':startup' in c for c in capabilities):
+            datastores.append("startup")
+
+        profile = SchemaProfile(
+            modules=tuple(modules),
+            datastore_schemas=tuple(datastores),
+            content_id=(
+                getattr(self.schema_config, 'device_profile', None)
+                or getattr(self.schema_config, 'profile', None)
+            ),
+        )
+
+        try:
+            sm = SchemaManager(global_cache_dir=self.schema_config.cache_dir)
+            sm.db.save_profile(profile)
+            sm.db.bind_device(device_key=self.target, protocol="netconf", profile_id=profile.profile_id)
+        except Exception as e:
+            logger.debug(f"[NetconfClient] Error saving discovered profile to SchemaDB: {e}")
+
+        self.schema_profile = profile
+        return profile
+
+    def _extract_schema_content(self, reply: Any) -> Optional[str]:
+        """Extracts raw YANG schema text from an ncclient get_schema reply or XML string."""
+        if reply is None:
+            return None
+        if hasattr(reply, 'data') and reply.data:
+            return reply.data
+        if hasattr(reply, '_data') and reply._data:
+            return reply._data
+        if isinstance(reply, str):
+            if "<data" in reply:
+                try:
+                    from xml.etree import ElementTree as ET
+                    root = ET.fromstring(reply)
+                    for elem in root.iter():
+                        if elem.tag.endswith('data') and elem.text:
+                            return elem.text
+                except Exception:
+                    pass
+            return reply
+        if hasattr(reply, 'xml'):
+            try:
+                from xml.etree import ElementTree as ET
+                root = ET.fromstring(reply.xml)
+                for elem in root.iter():
+                    if elem.tag.endswith('data') and elem.text:
+                        return elem.text
+            except Exception:
+                pass
+        return None
+
+    def get_schema(self, identifier: str, version: Optional[str] = None, format: Optional[str] = None) -> Any:
+        """
+        Executes RFC 6022 <get-schema> RPC, caches the resulting YANG module in SchemaDB,
+        and returns the result.
+        """
+        fmt = format
+        if fmt and fmt.lower() == 'yang':
+            fmt = None
+        res = self.session.get_schema(
+            identifier=identifier,
+            version=version or None,
+            format=fmt
+        )
+        content = self._extract_schema_content(res)
+        if content:
+            try:
+                sm = SchemaManager(global_cache_dir=self.schema_config.cache_dir)
+                sm.db.store_module_content(
+                    name=identifier,
+                    revision=version,
+                    content=content,
+                    source="netconf_get_schema",
+                    verify_with_libyang=False,
+                )
+            except Exception as e:
+                logger.debug(f"[NetconfClient] Error storing downloaded schema in SchemaDB: {e}")
+        return res
+
     def execute_capabilities(self, operation: CapabilitiesOperation) -> Any:
         """Executes Capabilities discovery based on CapabilitiesOperation."""
         return self.capability()
 
     def execute_schema(self, operation: GetSchemaOperation) -> Any:
         """Executes schema retrieval based on GetSchemaOperation."""
-        fmt = operation.format
-        if fmt and fmt.lower() == 'yang':
-            fmt = None
         try:
-            return self.session.get_schema(
+            return self.get_schema(
                 identifier=operation.identifier,
                 version=operation.version or None,
-                format=fmt
+                format=operation.format
             )
         except Exception as e:
             return e
@@ -107,6 +228,28 @@ class NetconfClient(BaseClient):
             filter_arg = operation.selector.expression
         elif isinstance(operation.selector, PathSelector):
             paths = list(operation.selector.paths)
+
+        if self.schema_config and self.schema_config.validate and paths:
+            if self.schema_profile is None:
+                if self.schema_config.auto_discovery and self.session:
+                    try:
+                        self.discover_schema_profile()
+                    except Exception:
+                        pass
+                if self.schema_profile is None:
+                    pid = (
+                        getattr(self.schema_config, 'device_profile', None)
+                        or getattr(self.schema_config, 'profile', None)
+                    )
+                    self.schema_profile = SchemaProfile(content_id=pid)
+            sm = SchemaManager(global_cache_dir=self.schema_config.cache_dir)
+            sm.get_or_create_context(
+                profile=self.schema_profile,
+                search_dirs=self.schema_config.yang_dirs,
+                strict=True,
+            )
+            for p in paths:
+                sm.validate_path(path=p, profile_id=self.schema_profile.profile_id, operation=operation)
 
         source = "running"
         if isinstance(operation.protocol_options, NetconfOptions):
@@ -166,6 +309,65 @@ class NetconfClient(BaseClient):
                 creates.append(val)
             elif change.operation == ChangeType.REMOVE:
                 removes.append(val)
+
+        if self.schema_config and self.schema_config.validate:
+            if self.schema_profile is None:
+                if self.schema_config.auto_discovery and self.session:
+                    try:
+                        self.discover_schema_profile()
+                    except Exception:
+                        pass
+                if self.schema_profile is None:
+                    pid = (
+                        getattr(self.schema_config, 'device_profile', None)
+                        or getattr(self.schema_config, 'profile', None)
+                    )
+                    self.schema_profile = SchemaProfile(content_id=pid)
+
+            sm = SchemaManager(global_cache_dir=self.schema_config.cache_dir)
+            sctx = sm.get_or_create_context(
+                profile=self.schema_profile,
+                search_dirs=self.schema_config.yang_dirs,
+                strict=True,
+            )
+
+            fetch_cb = (
+                (lambda name, rev: self._extract_schema_content(self.get_schema(name, rev)))
+                if self.schema_config.auto_fetch
+                else None
+            )
+
+            if not raw_config and operation.changes:
+                if fetch_cb and self.schema_profile.modules:
+                    for m in self.schema_profile.modules:
+                        try:
+                            sm.resolver.ensure_module(
+                                context=sctx,
+                                module_name=m.name,
+                                revision=m.revision,
+                                search_dirs=self.schema_config.yang_dirs,
+                                fetch_callback=fetch_cb,
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                f"Failed to ensure module '{m.name}' via fetch callback: {exc}"
+                            )
+
+                raw_config = sm.validate_and_serialize_netconf_edit(
+                    changes=operation.changes,
+                    profile_id=self.schema_profile.profile_id,
+                    default_operation=default_op,
+                )
+                updates = []
+                replaces = []
+                deletes = []
+                creates = []
+                removes = []
+            elif operation.changes:
+                for ch in operation.changes:
+                    sm.validate_path(path=ch.path, profile_id=self.schema_profile.profile_id, operation=operation)
+                    if ch.value is not None:
+                        sm.validate_payload(path=ch.path, value=ch.value, profile_id=self.schema_profile.profile_id, operation=operation)
 
         # Datastore capability fallback
         if target_ds == 'candidate' and not self._has_capability(':candidate'):
