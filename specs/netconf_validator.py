@@ -67,3 +67,27 @@ class NetconfValidator(BaseValidator):
         except Exception as e:
             raise PathValidationError(f"Validation failed for '{path_str}': {e}") from e
 
+    def validate_subscription(
+        self,
+        stream_name: str = "NETCONF",
+        start_time: Optional[str] = None,
+        stop_time: Optional[str] = None,
+        filter_str: Optional[str] = None,
+        filter_type: str = "subtree",
+    ) -> None:
+        """
+        Validates RFC 5277 subscription parameters and optional filters.
+        """
+        if not stream_name or not stream_name.strip():
+            raise PathValidationError("stream_name cannot be empty.")
+
+        if stop_time and not start_time:
+            raise PathValidationError("RFC 5277 violation: stop_time cannot be specified without start_time.")
+
+        if start_time and stop_time and stop_time <= start_time:
+            raise PathValidationError(f"stop_time ({stop_time}) must be strictly later than start_time ({start_time}).")
+
+        if filter_str:
+            self.validate_path(filter_str, operation="subscribe", filter_type=filter_type)
+
+

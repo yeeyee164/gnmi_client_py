@@ -82,6 +82,19 @@ def _normalize_mode_token(value: Any) -> str:
     return str(value).strip().lower().replace("-", "_") if value is not None else ""
 
 
+def extract_filter_expression(raw_filter: Any, default_type: Optional[str] = None) -> tuple[str, str]:
+    """Extracts filter expression and filter type from string or dictionary YAML input."""
+    if isinstance(raw_filter, dict):
+        expr = raw_filter.get("select") or raw_filter.get("expression") or raw_filter.get("filter") or ""
+        filter_str = read_payload(expr) if isinstance(expr, str) else str(expr)
+        f_type = raw_filter.get("type") or default_type or ("subtree" if filter_str.strip().startswith("<") else "xpath")
+        return filter_str, f_type
+    filter_str = read_payload(raw_filter) if isinstance(raw_filter, str) else str(raw_filter)
+    f_type = default_type or ("subtree" if filter_str.strip().startswith("<") else "xpath")
+    return filter_str, f_type
+
+
+
 def resolve_delivery_mode(rpc_mode: Optional[str],
                           sub_mode: Optional[str] = None,
                           default_sub_mode: str = "sample") -> DeliveryMode:
@@ -559,12 +572,33 @@ class CLIConfigBuilder(ConfigBuilder):
                     )
                 elif operation == 'subscribe':
                     raw_filter = read_payload(getattr(self.args, "filter", ""))
-                    stream_name = getattr(self.args, "stream_name", "NETCONF")
-                    selector = FilterSelector(expression=raw_filter, filter_type="subtree") if raw_filter else PathSelector(paths=())
+                    nc_xpath = getattr(self.args, "nc_xpath", []) or []
+                    if raw_filter:
+                        filter_type = "subtree" if raw_filter.strip().startswith('<') else "xpath"
+                        selector = FilterSelector(expression=raw_filter, filter_type=filter_type)
+                    elif nc_xpath:
+                        selector = PathSelector(paths=tuple(nc_xpath))
+                    elif paths:
+                        selector = PathSelector(paths=tuple(paths))
+                    else:
+                        selector = PathSelector(paths=())
+
+                    stream_name = getattr(self.args, "stream_name", "NETCONF") or "NETCONF"
+                    start_time = getattr(self.args, "start_time", None)
+                    stop_time = getattr(self.args, "stop_time", None)
+                    poll_timeout = float(getattr(self.args, "poll_timeout", 1.0) or 1.0)
+
+                    nc_opts = NetconfOptions(
+                        stream_name=stream_name,
+                        start_time=start_time,
+                        stop_time=stop_time,
+                        poll_timeout=poll_timeout,
+                    )
                     op_obj = SubscribeOperation(
                         selector=selector,
-                        delivery=DeliveryPolicy(mode=DeliveryMode.PERIODIC),
-                        subscription_name=stream_name
+                        delivery=DeliveryPolicy(mode=DeliveryMode.EVENT_DRIVEN),
+                        subscription_name=stream_name,
+                        protocol_options=nc_opts,
                     )
                 else:
                     raise ValueError(f"Unknown NETCONF operation: {operation}")
@@ -692,8 +726,7 @@ def parse_operation_item(op_item: Any, protocol: Protocol = Protocol.NETCONF) ->
             paths = [paths]
 
         if raw_filter:
-            filter_str = read_payload(raw_filter) if isinstance(raw_filter, str) else str(raw_filter)
-            f_type = filter_type or ("subtree" if filter_str.strip().startswith("<") else "xpath")
+            filter_str, f_type = extract_filter_expression(raw_filter, default_type=filter_type)
             selector = FilterSelector(expression=filter_str, filter_type=f_type)
         elif paths:
             selector = PathSelector(paths=tuple(paths), prefix=op_params.get("prefix", ""))
@@ -716,8 +749,7 @@ def parse_operation_item(op_item: Any, protocol: Protocol = Protocol.NETCONF) ->
             paths = [paths]
 
         if raw_filter:
-            filter_str = read_payload(raw_filter) if isinstance(raw_filter, str) else str(raw_filter)
-            f_type = filter_type or ("subtree" if filter_str.strip().startswith("<") else "xpath")
+            filter_str, f_type = extract_filter_expression(raw_filter, default_type=filter_type)
             selector = FilterSelector(expression=filter_str, filter_type=f_type)
         elif paths:
             selector = PathSelector(paths=tuple(paths), prefix=op_params.get("prefix", ""))
@@ -1090,15 +1122,42 @@ class FileConfigBuilder(ConfigBuilder):
                         heartbeat=0,
                         suppress_redundant=False
                     )
-                    op_obj = SubscribeOperation(
-                        selector=PathSelector(paths=tuple(paths), prefix=named_sub.get('prefix', '')),
-                        delivery=del_policy,
-                        subscription_name=sub_name,
-                        protocol_options=GNMIOptions(
-                            encoding=named_sub.get('encoding', 'json_ietf'),
-                            updates_only=update_only,
+                    if proto_enum == Protocol.NETCONF:
+                        raw_filter = named_sub.get('filter') or sub_details.get('filter')
+                        if raw_filter:
+                            filter_str, f_type = extract_filter_expression(
+                                raw_filter,
+                                default_type=named_sub.get('filter_type')
+                            )
+                            sub_selector = FilterSelector(expression=filter_str, filter_type=f_type)
+                        elif paths:
+                            sub_selector = PathSelector(paths=tuple(paths), prefix=named_sub.get('prefix', ''))
+                        else:
+                            sub_selector = PathSelector(paths=())
+
+                        st_name = named_sub.get('stream_name') or named_sub.get('stream') or sub_name or 'NETCONF'
+                        nc_opts = NetconfOptions(
+                            stream_name=st_name,
+                            start_time=named_sub.get('start_time'),
+                            stop_time=named_sub.get('stop_time'),
+                            poll_timeout=float(named_sub.get('poll_timeout', 1.0)),
                         )
-                    )
+                        op_obj = SubscribeOperation(
+                            selector=sub_selector,
+                            delivery=DeliveryPolicy(mode=DeliveryMode.EVENT_DRIVEN),
+                            subscription_name=sub_name,
+                            protocol_options=nc_opts,
+                        )
+                    else:
+                        op_obj = SubscribeOperation(
+                            selector=PathSelector(paths=tuple(paths), prefix=named_sub.get('prefix', '')),
+                            delivery=del_policy,
+                            subscription_name=sub_name,
+                            protocol_options=GNMIOptions(
+                                encoding=named_sub.get('encoding', 'json_ietf'),
+                                updates_only=update_only,
+                            )
+                        )
                     session = SessionConfig(
                         connection=conn,
                         protocol=proto_enum,
@@ -1113,8 +1172,7 @@ class FileConfigBuilder(ConfigBuilder):
                     paths = [paths]
 
                 if t_raw_filter:
-                    filter_str = read_payload(t_raw_filter) if isinstance(t_raw_filter, str) else str(t_raw_filter)
-                    f_type = "subtree" if filter_str.strip().startswith('<') else "xpath"
+                    filter_str, f_type = extract_filter_expression(t_raw_filter)
                     selector = FilterSelector(expression=filter_str, filter_type=f_type)
                 else:
                     selector = PathSelector(paths=tuple(paths), prefix=tgt_info.get('prefix', ''))
@@ -1435,6 +1493,21 @@ def netconf_args(parser):
     # <discard-changes>
     parser_discard = subparsers.add_parser('discard-changes', aliases=['discard_changes'], help="NETCONF <discard-changes>")
     add_schema_args(parser_discard, is_child=True)
+
+    # <create-subscription> (RFC 5277)
+    parser_sub = subparsers.add_parser('subscribe', help="NETCONF Event Notification (RFC 5277)")
+    add_schema_args(parser_sub, is_child=True)
+    parser_sub.add_argument('--stream', '--stream-name', dest='stream_name', default='NETCONF',
+                            help="Event stream name to subscribe to (default: NETCONF)")
+    parser_sub.add_argument('--filter', default='',
+                            help="XML filter string or path to file")
+    parser_sub.add_argument('--nc-xpath', action='append', help="List of selected NETCONF XPaths")
+    parser_sub.add_argument('--start-time', default=None,
+                            help="Start time for notification replay (ISO 8601 / RFC 3339)")
+    parser_sub.add_argument('--stop-time', default=None,
+                            help="Stop time for notification replay (ISO 8601 / RFC 3339)")
+    parser_sub.add_argument('--poll-timeout', type=float, default=1.0,
+                            help="Poll timeout in seconds for notifications (default: 1.0)")
 
 
 def gnmi_args(parser):

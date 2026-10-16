@@ -343,6 +343,29 @@ class NETCONFFormatter(ProtocolFormatter):
                 res['data'] = getattr(raw_data, 'xml', str(raw_data))
             return res
 
+        # Handle StreamEvent or raw dictionary payload
+        from specs.stream_types import StreamEvent
+        if isinstance(raw_data, StreamEvent):
+            if raw_data.error is not None:
+                res['error'] = str(raw_data.error)
+                return res
+            res['is_sync_marker'] = raw_data.is_sync_marker
+            if raw_data.timestamp:
+                res['timestamp'] = raw_data.timestamp
+            if raw_data.data:
+                res['data'] = raw_data.data
+            else:
+                raw_xml = raw_data.raw_payload or ""
+                try:
+                    res['data'] = xmltodict.parse(raw_xml) if xmltodict and raw_xml else raw_xml
+                except Exception:
+                    res['data'] = raw_xml
+            return res
+
+        if isinstance(raw_data, dict):
+            res['data'] = raw_data
+            return res
+
         # Handle get, get-config, and other XML RPC replies
         data_xml = getattr(raw_data, 'data_xml', None)
         if isinstance(data_xml, (str, bytes)):
@@ -387,8 +410,17 @@ class NETCONFFormatter(ProtocolFormatter):
                     lines.append(str(item))
             return "\n".join(lines)
 
-        if hasattr(raw_data, 'data'):
-            return raw_data.data
+        from specs.stream_types import StreamEvent
+        if isinstance(raw_data, StreamEvent):
+            if raw_data.error is not None:
+                return f"[NETCONF Notification Error] {raw_data.error}"
+            return str(raw_data.raw_payload or raw_data.data)
+
+        if isinstance(raw_data, dict):
+            return json.dumps(raw_data, indent=2)
+
+        if hasattr(raw_data, 'data') and isinstance(getattr(raw_data, 'data', None), (str, dict, list)):
+            return raw_data.data if isinstance(raw_data.data, str) else json.dumps(raw_data.data, indent=2)
 
         xml_node = getattr(raw_data, 'xml', raw_data)
         if not isinstance(xml_node, str):

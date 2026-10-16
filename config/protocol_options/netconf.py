@@ -23,6 +23,12 @@ class NetconfOptions(BaseProtocolOptions):
     persist: str = ""
     persist_id: str = ""
 
+    # RFC 5277 Event Notification parameters
+    stream_name: str = "NETCONF"
+    start_time: Optional[str] = None
+    stop_time: Optional[str] = None
+    poll_timeout: float = 1.0
+
     def __post_init__(self):
         if self.source_datastore is not None and self.source == "running":
             object.__setattr__(self, 'source', self.source_datastore)
@@ -73,3 +79,21 @@ class NetconfOptions(BaseProtocolOptions):
 
         if self.validate_candidate and effective_target != "candidate":
             raise ValueError("validate_candidate is only valid for the 'candidate' datastore.")
+
+        # RFC 5277 Event Notification Constraints
+        if self.stop_time and not self.start_time:
+            raise ValueError(
+                "RFC 5277 constraint violation: 'stop_time' cannot be specified without 'start_time'."
+            )
+
+        if self.start_time and self.stop_time:
+            if self.stop_time <= self.start_time:
+                raise ValueError(
+                    f"Invalid time bounds: 'stop_time' ({self.stop_time}) must be strictly later "
+                    f"than 'start_time' ({self.start_time})."
+                )
+
+        if self.poll_timeout <= 0:
+            raise ValueError(
+                f"Invalid poll_timeout '{self.poll_timeout}'. Must be a positive float."
+            )
