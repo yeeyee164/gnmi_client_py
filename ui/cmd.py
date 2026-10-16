@@ -82,6 +82,19 @@ def _normalize_mode_token(value: Any) -> str:
     return str(value).strip().lower().replace("-", "_") if value is not None else ""
 
 
+def extract_filter_expression(raw_filter: Any, default_type: Optional[str] = None) -> tuple[str, str]:
+    """Extracts filter expression and filter type from string or dictionary YAML input."""
+    if isinstance(raw_filter, dict):
+        expr = raw_filter.get("select") or raw_filter.get("expression") or raw_filter.get("filter") or ""
+        filter_str = read_payload(expr) if isinstance(expr, str) else str(expr)
+        f_type = raw_filter.get("type") or default_type or ("subtree" if filter_str.strip().startswith("<") else "xpath")
+        return filter_str, f_type
+    filter_str = read_payload(raw_filter) if isinstance(raw_filter, str) else str(raw_filter)
+    f_type = default_type or ("subtree" if filter_str.strip().startswith("<") else "xpath")
+    return filter_str, f_type
+
+
+
 def resolve_delivery_mode(rpc_mode: Optional[str],
                           sub_mode: Optional[str] = None,
                           default_sub_mode: str = "sample") -> DeliveryMode:
@@ -713,8 +726,7 @@ def parse_operation_item(op_item: Any, protocol: Protocol = Protocol.NETCONF) ->
             paths = [paths]
 
         if raw_filter:
-            filter_str = read_payload(raw_filter) if isinstance(raw_filter, str) else str(raw_filter)
-            f_type = filter_type or ("subtree" if filter_str.strip().startswith("<") else "xpath")
+            filter_str, f_type = extract_filter_expression(raw_filter, default_type=filter_type)
             selector = FilterSelector(expression=filter_str, filter_type=f_type)
         elif paths:
             selector = PathSelector(paths=tuple(paths), prefix=op_params.get("prefix", ""))
@@ -737,8 +749,7 @@ def parse_operation_item(op_item: Any, protocol: Protocol = Protocol.NETCONF) ->
             paths = [paths]
 
         if raw_filter:
-            filter_str = read_payload(raw_filter) if isinstance(raw_filter, str) else str(raw_filter)
-            f_type = filter_type or ("subtree" if filter_str.strip().startswith("<") else "xpath")
+            filter_str, f_type = extract_filter_expression(raw_filter, default_type=filter_type)
             selector = FilterSelector(expression=filter_str, filter_type=f_type)
         elif paths:
             selector = PathSelector(paths=tuple(paths), prefix=op_params.get("prefix", ""))
@@ -1114,8 +1125,10 @@ class FileConfigBuilder(ConfigBuilder):
                     if proto_enum == Protocol.NETCONF:
                         raw_filter = named_sub.get('filter') or sub_details.get('filter')
                         if raw_filter:
-                            filter_str = read_payload(raw_filter) if isinstance(raw_filter, str) else str(raw_filter)
-                            f_type = named_sub.get('filter_type', 'subtree' if filter_str.strip().startswith('<') else 'xpath')
+                            filter_str, f_type = extract_filter_expression(
+                                raw_filter,
+                                default_type=named_sub.get('filter_type')
+                            )
                             sub_selector = FilterSelector(expression=filter_str, filter_type=f_type)
                         elif paths:
                             sub_selector = PathSelector(paths=tuple(paths), prefix=named_sub.get('prefix', ''))
@@ -1159,8 +1172,7 @@ class FileConfigBuilder(ConfigBuilder):
                     paths = [paths]
 
                 if t_raw_filter:
-                    filter_str = read_payload(t_raw_filter) if isinstance(t_raw_filter, str) else str(t_raw_filter)
-                    f_type = "subtree" if filter_str.strip().startswith('<') else "xpath"
+                    filter_str, f_type = extract_filter_expression(t_raw_filter)
                     selector = FilterSelector(expression=filter_str, filter_type=f_type)
                 else:
                     selector = PathSelector(paths=tuple(paths), prefix=tgt_info.get('prefix', ''))

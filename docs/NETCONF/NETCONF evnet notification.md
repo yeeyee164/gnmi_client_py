@@ -1,4 +1,4 @@
-# RFC 5277 NETCONF Event Notifications Specification
+# NETCONF Event Notifications Specification
 
 **Target Feature**: RFC 5277 (`<create-subscription>` & `<notification>`) Streaming Integration  
 **Related Milestones & Specs**:
@@ -89,6 +89,8 @@ To achieve streaming parity between gNMI `Subscribe` and NETCONF Event Notificat
 ---
 
 ## 3. Component Specification & Code Changes
+
+> NOTE: These are example code segments, not full implementation specs.
 
 ### 3.1 Protocol Options (`config/protocol_options/netconf.py`)
 
@@ -402,8 +404,8 @@ Implement comprehensive mocks for `ncclient.manager`:
    Verify `NetconfOptions.validate()` raises `ValueError`.
 
 ### 4.2 Live Interoperability Test
-Verify against a containerized router (e.g., Nokia SRLinux or Cisco XR):
+Verify against a containerized router (e.g., Cisco XR or Netopeer2 NETCONF server simulator):
 ```bash
-python client_main.py --target 172.20.20.2:830 netconf subscribe --stream NETCONF
+python client_main.py --target 172.20.20.4:830 netconf subscribe --stream NETCONF
 ```
 Verify notifications are logged to stdout and that pressing `Ctrl+C` terminates the session cleanly without orphan SSH processes.

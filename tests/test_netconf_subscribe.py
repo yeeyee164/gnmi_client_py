@@ -88,23 +88,35 @@ class TestNetconfFilterBuilding:
 
         # FilterSelector xpath
         sel_xpath = FilterSelector(expression="/interfaces/interface", filter_type="xpath")
-        assert client._build_subscription_filter(sel_xpath) == ("xpath", "/interfaces/interface")
+        assert client._build_subscription_filter(sel_xpath) == (
+            '<filter xmlns="urn:ietf:params:xml:ns:netconf:notification:1.0" type="xpath" select="/interfaces/interface"/>'
+        )
 
         # FilterSelector subtree
         sel_sub = FilterSelector(expression="<interfaces/>", filter_type="subtree")
-        assert client._build_subscription_filter(sel_sub) == "<interfaces/>"
+        assert client._build_subscription_filter(sel_sub) == (
+            '<filter xmlns="urn:ietf:params:xml:ns:netconf:notification:1.0" type="subtree"><interfaces/></filter>'
+        )
 
         # PathSelector single xpath
         sel_p1 = PathSelector(paths=("/interfaces/interface[name='eth0']",))
-        assert client._build_subscription_filter(sel_p1) == ("xpath", "/interfaces/interface[name='eth0']")
+        assert client._build_subscription_filter(sel_p1) == (
+            '<filter xmlns="urn:ietf:params:xml:ns:netconf:notification:1.0" type="xpath" select="/interfaces/interface[name=\'eth0\']"/>'
+        )
 
         # PathSelector xml string
         sel_pxml = PathSelector(paths=("<interfaces><interface/></interfaces>",))
-        assert client._build_subscription_filter(sel_pxml) == "<interfaces><interface/></interfaces>"
+        assert client._build_subscription_filter(sel_pxml) == (
+            '<filter xmlns="urn:ietf:params:xml:ns:netconf:notification:1.0" type="subtree"><interfaces><interface/></interfaces></filter>'
+        )
 
         # String selector
-        assert client._build_subscription_filter("<filter/>") == "<filter/>"
-        assert client._build_subscription_filter("/system/state") == ("xpath", "/system/state")
+        assert client._build_subscription_filter("<filter/>") == (
+            '<filter xmlns="urn:ietf:params:xml:ns:netconf:notification:1.0"/>'
+        )
+        assert client._build_subscription_filter("/system/state") == (
+            '<filter xmlns="urn:ietf:params:xml:ns:netconf:notification:1.0" type="xpath" select="/system/state"/>'
+        )
 
 
 class TestNetconfEventTimeParsing:
@@ -329,6 +341,32 @@ class TestNetconfCLISubscribe:
         assert po.stop_time == "2026-10-14T12:00:00Z"
         assert po.poll_timeout == 1.0
 
+        assert isinstance(sess.operation.selector, FilterSelector)
+        assert sess.operation.selector.expression == "/srl_nokia-interfaces:interfaces"
+        assert sess.operation.selector.filter_type == "xpath"
+
+    def test_yaml_netopeer2_subscribe_parsing(self):
+        args = ["netconf", "-c", "tests/netopeer2_subscribe_test.yaml"]
+        parsed = parse_args(args)
+        assert len(parsed.sessions) == 1
+        sess = parsed.sessions[0]
+        assert sess.protocol == Protocol.NETCONF
+        assert sess.connection.target == "172.20.20.4:830"
+        assert isinstance(sess.operation, SubscribeOperation)
+        assert sess.operation.subscription_name == "session_events"
+        assert sess.operation.delivery.mode == DeliveryMode.EVENT_DRIVEN
+
+        po = sess.operation.protocol_options
+        assert isinstance(po, NetconfOptions)
+        assert po.stream_name == "NETCONF"
+        assert po.poll_timeout == 0.5
+
+        assert isinstance(sess.operation.selector, FilterSelector)
+        assert sess.operation.selector.filter_type == "subtree"
+        assert "<netconf-session-start" in sess.operation.selector.expression
+
+
+
 
 
 @pytest.mark.live
@@ -360,3 +398,175 @@ class TestLiveNokiaSRLinuxNetconfSubscription:
             context = StreamContext()
             with pytest.raises(UnsupportedOperationError, match="does not support RFC 5277"):
                 client.execute_subscribe(context=context)
+
+
+@pytest.mark.live
+class TestLiveNetopeer2NetconfSubscription:
+    """
+    Live target verification against Netopeer2 NETCONF simulator (172.20.20.4:830).
+    Verifies that NetconfClient connects, verifies RFC 5277 server capabilities,
+    and performs unfiltered and filtered event subscriptions with live event delivery.
+    """
+    TARGET = "172.20.20.4:830"
+    USERNAME = "root"
+    PASSWORD = "root"
+
+    def test_live_netopeer2_capabilities(self):
+        """
+        Verifies :notification:1.0 and :interleave:1.0 capabilities on netopeer2.
+        """
+        client = NetconfClient(
+            target=self.TARGET,
+            username=self.USERNAME,
+            password=self.PASSWORD,
+        )
+        with client:
+            assert client.session is not None
+            assert client.session.connected
+            server_caps = list(client.session.server_capabilities)
+
+            # Netopeer2 MUST advertise RFC 5277 notification capability
+            assert any("urn:ietf:params:netconf:capability:notification:1.0" in c for c in server_caps), (
+                "Netopeer2 must advertise RFC 5277 :notification:1.0"
+            )
+            # Netopeer2 also supports interleaving
+            assert any("urn:ietf:params:netconf:capability:interleave:1.0" in c for c in server_caps), (
+                "Netopeer2 must advertise RFC 5277 :interleave:1.0"
+            )
+
+    def test_live_netopeer2_unfiltered_subscription_and_reception(self):
+        """
+        Establishes unfiltered NETCONF subscription, triggers live event via secondary session,
+        verifies `StreamEvent` receipt('netconf-session-start').
+        """
+        from ncclient import manager
+
+        client = NetconfClient(
+            target=self.TARGET,
+            username=self.USERNAME,
+            password=self.PASSWORD,
+        )
+
+        received_events = []
+        ctx = StreamContext()
+
+        def subscriber_thread():
+            with client:
+                opts = NetconfOptions(stream_name="NETCONF", poll_timeout=0.5)
+                for event in client.execute_subscribe(options=opts, context=ctx):
+                    received_events.append(event)
+                    if len(received_events) >= 1:
+                        ctx.cancel()
+                        break
+
+        t = threading.Thread(target=subscriber_thread)
+        t.start()
+
+        # Allow subscriber to establish create-subscription
+        time.sleep(1.5)
+
+        # Trigger event via secondary session connect/disconnect
+        m = manager.connect(
+            host="172.20.20.4",
+            port=830,
+            username=self.USERNAME,
+            password=self.PASSWORD,
+            hostkey_verify=False,
+            timeout=5
+        )
+        time.sleep(0.5)
+        m.close_session()
+
+        t.join(timeout=6)
+        ctx.cancel()
+        t.join(timeout=2)
+
+        assert len(received_events) >= 1, "Expected at least 1 notification event from Netopeer2"
+        event = received_events[0]
+        assert event.protocol == "netconf"
+        assert isinstance(event.timestamp, float)
+        assert event.timestamp > 0
+        assert event.raw_payload is not None
+        assert "<notification" in event.raw_payload
+        assert event.data is not None
+        assert "notification" in event.data
+
+    def test_live_netopeer2_subtree_filtered_subscription(self):
+        """
+        Subscribes with subtree filter for `<netconf-session-start>`,
+        triggers event, verifies delivery of matching notification 
+        """
+        from ncclient import manager
+
+        client = NetconfClient(
+            target=self.TARGET,
+            username=self.USERNAME,
+            password=self.PASSWORD,
+        )
+
+        received_events = []
+        ctx = StreamContext()
+
+        def subscriber_thread():
+            with client:
+                filt = FilterSelector(
+                    expression='<netconf-session-start xmlns="urn:ietf:params:xml:ns:yang:ietf-netconf-notifications"/>',
+                    filter_type="subtree"
+                )
+                opts = NetconfOptions(stream_name="NETCONF", poll_timeout=0.5)
+                for event in client.execute_subscribe(selectors=filt, options=opts, context=ctx):
+                    received_events.append(event)
+                    if len(received_events) >= 1:
+                        ctx.cancel()
+                        break
+
+        t = threading.Thread(target=subscriber_thread)
+        t.start()
+
+        time.sleep(1.5)
+
+        m = manager.connect(
+            host="172.20.20.4",
+            port=830,
+            username=self.USERNAME,
+            password=self.PASSWORD,
+            hostkey_verify=False,
+            timeout=5
+        )
+        time.sleep(0.5)
+        m.close_session()
+
+        t.join(timeout=6)
+        ctx.cancel()
+        t.join(timeout=2)
+
+        assert len(received_events) >= 1, "Expected filtered netconf-session-start notification"
+        event = received_events[0]
+        assert "netconf-session-start" in event.raw_payload
+
+    def test_live_netopeer2_xpath_filtered_subscription(self):
+        """
+        Subscribes with XPath filter `/netconf-session-start` without XML error
+        """
+        client = NetconfClient(
+            target=self.TARGET,
+            username=self.USERNAME,
+            password=self.PASSWORD,
+        )
+
+        ctx = StreamContext()
+        with client:
+            filt = FilterSelector(
+                expression='/netconf-session-start',
+                filter_type="xpath"
+            )
+            opts = NetconfOptions(stream_name="NETCONF", poll_timeout=0.5)
+            # Starting subscription with XPath filter must succeed without XML / RPC error
+            gen = client.execute_subscribe(selectors=filt, options=opts, context=ctx)
+            # Cancel immediately after create-subscription succeeded
+            ctx.cancel()
+            events = list(gen)
+            # Succeeded without raising RPCError or yielding error StreamEvent
+            for ev in events:
+                assert ev.error is None
+

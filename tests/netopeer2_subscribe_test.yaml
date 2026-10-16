@@ -1,0 +1,22 @@
+protocol: "netconf"
+
+subscriptions:
+  session_events:
+    stream_name: "NETCONF"
+    poll_timeout: 0.5
+    filter:
+      type: "subtree"
+      select: '<netconf-session-start xmlns="urn:ietf:params:xml:ns:yang:ietf-netconf-notifications"/>'
+
+targets:
+  172.20.20.4:830:
+    username: "root"
+    password: "root"
+    subscriptions:
+      - session_events
+
+outputs:
+  default_output:
+    output-type: stdout
+    format: json
+

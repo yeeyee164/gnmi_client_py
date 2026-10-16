@@ -764,29 +764,49 @@ class NetconfClient(BaseClient):
         except Exception:
             return time.time()
 
-    def _build_subscription_filter(self, selector: Any) -> Optional[tuple[str, str] | str]:
-        """Constructs filter argument suitable for ncclient.create_subscription."""
+    def _build_subscription_filter(self, selector: Any) -> Optional[str]:
+        """
+        Constructs an RFC 5277 compliant filter XML string suitable for
+        ncclient.create_subscription. Ensures the <filter> element resides
+        in 'urn:ietf:params:xml:ns:netconf:notification:1.0'.
+        """
         if selector is None:
             return None
+
+        notif_ns = 'xmlns="urn:ietf:params:xml:ns:netconf:notification:1.0"'
+
+        def _wrap_filter(content: str, filter_type: str = "subtree") -> str:
+            content = content.strip()
+            if not content:
+                return ""
+            if content.startswith("<filter"):
+                if "xmlns=" not in content:
+                    return content.replace("<filter", f"<filter {notif_ns}", 1)
+                elif "urn:ietf:params:xml:ns:netconf:base:1.0" in content:
+                    return content.replace(
+                        "urn:ietf:params:xml:ns:netconf:base:1.0",
+                        "urn:ietf:params:xml:ns:netconf:notification:1.0"
+                    )
+                return content
+            if filter_type == "xpath":
+                return f'<filter {notif_ns} type="xpath" select="{content}"/>'
+            return f'<filter {notif_ns} type="subtree">{content}</filter>'
 
         if isinstance(selector, FilterSelector):
             content = (selector.expression or "").strip()
             if not content:
                 return None
-            if getattr(selector, "filter_type", "subtree") == "xpath":
-                return ("xpath", content)
-            return content
+            f_type = getattr(selector, "filter_type", "subtree")
+            return _wrap_filter(content, filter_type=f_type)
 
         if isinstance(selector, PathSelector):
             paths = list(selector.paths) if hasattr(selector, "paths") else []
             if not paths:
                 return None
-            if len(paths) == 1 and not paths[0].strip().startswith("<"):
-                return ("xpath", paths[0].strip())
-            elif any(p.strip().startswith("<") for p in paths):
-                return paths[0].strip()
-            else:
-                return ("xpath", paths[0].strip())
+            first = paths[0].strip()
+            if first.startswith("<"):
+                return _wrap_filter(first, filter_type="subtree")
+            return _wrap_filter(first, filter_type="xpath")
 
         if isinstance(selector, (list, tuple)):
             if not selector:
@@ -794,19 +814,22 @@ class NetconfClient(BaseClient):
             first = selector[0]
             if isinstance(first, str):
                 s = first.strip()
+                if not s:
+                    return None
                 if s.startswith("<"):
-                    return s
-                return ("xpath", s)
+                    return _wrap_filter(s, filter_type="subtree")
+                return _wrap_filter(s, filter_type="xpath")
 
         if isinstance(selector, str):
             s = selector.strip()
             if not s:
                 return None
             if s.startswith("<"):
-                return s
-            return ("xpath", s)
+                return _wrap_filter(s, filter_type="subtree")
+            return _wrap_filter(s, filter_type="xpath")
 
         return None
+
 
     def execute_subscribe(
         self,
